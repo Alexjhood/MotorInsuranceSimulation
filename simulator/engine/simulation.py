@@ -26,6 +26,7 @@ class AgentState:
     agent_type: str
     heading: Tuple[int, int] | None
     lane_index: int
+    wait_steps: int
 
 
 @dataclass
@@ -86,6 +87,7 @@ class Simulation:
                 agent_type="driver",
                 heading=None,
                 lane_index=0,
+                wait_steps=self._node_wait_steps(home_node),
             )
             agent_id += 1
 
@@ -112,8 +114,13 @@ class Simulation:
                 agent_type="cyclist",
                 heading=None,
                 lane_index=0,
+                wait_steps=self._node_wait_steps(home_node),
             )
             agent_id += 1
+
+    def _node_wait_steps(self, node_id: int) -> int:
+        node_kind = self.map_data.nodes[node_id].kind
+        return 1 if node_kind in {"roundabout", "junction"} else 0
 
     def _select_destination(self, agent: AgentState) -> int:
         commerce = self.map_data.pois.get("commerce", [])
@@ -136,6 +143,9 @@ class Simulation:
         return self.random.choice(choices)
 
     def _advance_agent(self, agent: AgentState) -> Dict[str, float | int | None]:
+        if agent.wait_steps > 0:
+            agent.wait_steps -= 1
+            return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "wait"}
         if agent.route_index + 1 >= len(agent.route):
             agent.destination_node = self._select_destination(agent)
             agent.route = shortest_path(self.nav_adjacency, agent.current_node, agent.destination_node)
@@ -145,15 +155,14 @@ class Simulation:
         current_node = self.map_data.nodes[agent.current_node]
         target_node = self.map_data.nodes[next_node]
         desired_heading = (target_node.x - current_node.x, target_node.y - current_node.y)
-        if agent.heading is None:
-            agent.heading = desired_heading
-        if agent.heading != desired_heading:
+        if agent.heading is None or agent.heading != desired_heading:
             agent.heading = desired_heading
             return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "turn"}
         agent.route_index = next_index
         agent.previous_node = agent.current_node
         agent.current_node = next_node
         agent.heading = desired_heading
+        agent.wait_steps = self._node_wait_steps(next_node)
         return {"agent_id": agent.agent_id, "node": next_node, "action": "move"}
 
     def step(self) -> SimulationStepResult:
@@ -247,8 +256,15 @@ class Simulation:
         for edge_key, agent_ids in edge_groups.items():
             edge = self.edge_lookup.get(edge_key)
             lanes = edge.lanes if edge else 1
+            if edge and edge.road_type == "highway" and lanes > 1:
+                allowed = list(range(max(lanes - 2, 0), lanes))
+            elif lanes > 1:
+                allowed = [lanes - 1]
+            else:
+                allowed = [0]
             for idx, agent_id in enumerate(sorted(agent_ids)):
-                self.agents[agent_id].lane_index = idx % max(lanes, 1)
+                lane_index = allowed[idx % len(allowed)]
+                self.agents[agent_id].lane_index = lane_index
 
     def run(self, steps: int | None = None) -> List[SimulationStepResult]:
         if steps is None:

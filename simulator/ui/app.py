@@ -20,6 +20,7 @@ def build_map_figure(
     simulation: Simulation,
     accidents: List[dict],
     selected_agent: int | None = None,
+    view_bounds: tuple[float, float, float, float] | None = None,
 ) -> go.Figure:
     map_data = simulation.map_data
     edge_lookup = {(edge.start, edge.end): edge for edge in map_data.edges}
@@ -44,8 +45,9 @@ def build_map_figure(
         for offset in lane_offsets:
             coords["x"] += [start.x + perp_x * offset, end.x + perp_x * offset, None]
             coords["y"] += [start.y + perp_y * offset, end.y + perp_y * offset, None]
-        coords["x"] += [start.x, end.x, None]
-        coords["y"] += [start.y, end.y, None]
+        if edge.lanes <= 1:
+            coords["x"] += [start.x, end.x, None]
+            coords["y"] += [start.y, end.y, None]
         if edge.has_cycle_lane:
             cycle_x += [start.x, end.x, None]
             cycle_y += [start.y, end.y, None]
@@ -87,7 +89,7 @@ def build_map_figure(
         )
         x = node.x + offset_x
         y = node.y + offset_y
-        label = str(agent.agent_id)
+        label = f"A{agent.agent_id}"
         custom = {
             "type": "agent",
             "agent_id": agent.agent_id,
@@ -111,6 +113,15 @@ def build_map_figure(
     accident_y = []
     accident_customdata = []
     accident_labels = []
+    destination_x = []
+    destination_y = []
+    destination_labels = []
+    for agent in simulation.agents.values():
+        destination_node = map_data.nodes[agent.destination_node]
+        destination_x.append(destination_node.x)
+        destination_y.append(destination_node.y)
+        destination_labels.append(f"D{agent.agent_id}")
+
     for accident in accidents:
         node = map_data.nodes[accident["location"]]
         accident_x.append(node.x)
@@ -139,6 +150,20 @@ def build_map_figure(
                 mode="lines",
                 line=dict(color="#2ca02c", width=1.2, dash="dot"),
                 name="cycle lanes",
+                hoverinfo="skip",
+            )
+        )
+
+    if destination_x:
+        fig.add_trace(
+            go.Scatter(
+                x=destination_x,
+                y=destination_y,
+                mode="markers+text",
+                marker=dict(size=8, color="#ff6f61", symbol="circle-open"),
+                text=destination_labels,
+                textposition="bottom center",
+                name="destinations",
                 hoverinfo="skip",
             )
         )
@@ -243,13 +268,13 @@ def build_map_figure(
                 hovertemplate="%{text}<extra></extra>",
             )
         )
-    min_x, max_x, min_y, max_y = _map_bounds(map_data)
+    min_x, max_x, min_y, max_y = view_bounds or _map_bounds(map_data)
     fig.update_layout(
         height=640,
         width=920,
         margin=dict(l=20, r=20, t=30, b=20),
-        xaxis=dict(showgrid=False, zeroline=False, range=[min_x, max_x], fixedrange=True),
-        yaxis=dict(showgrid=False, zeroline=False, range=[min_y, max_y], fixedrange=True),
+        xaxis=dict(showgrid=False, zeroline=False, range=[min_x, max_x], fixedrange=False),
+        yaxis=dict(showgrid=False, zeroline=False, range=[min_y, max_y], fixedrange=False),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         dragmode="pan",
         uirevision="map",
@@ -321,6 +346,19 @@ def create_app() -> Dash:
                                     html.Div(
                                         style={"display": "flex", "flexDirection": "column", "gap": "8px"},
                                         children=[
+                                            html.Label("View Controls"),
+                                            html.Div(
+                                                style={"display": "flex", "gap": "6px", "flexWrap": "wrap"},
+                                                children=[
+                                                    html.Button("Zoom In", id="zoom-in-btn"),
+                                                    html.Button("Zoom Out", id="zoom-out-btn"),
+                                                    html.Button("Pan Left", id="pan-left-btn"),
+                                                    html.Button("Pan Right", id="pan-right-btn"),
+                                                    html.Button("Pan Up", id="pan-up-btn"),
+                                                    html.Button("Pan Down", id="pan-down-btn"),
+                                                    html.Button("Reset View", id="reset-view-btn"),
+                                                ],
+                                            ),
                                             html.Label("Playback Speed (steps/sec)"),
                                             dcc.Slider(
                                                 id="speed-control",
@@ -339,6 +377,11 @@ def create_app() -> Dash:
                                                     html.Button("Step", id="step-btn", style={"marginLeft": "8px"}),
                                                     html.Button("Reset", id="reset-btn", style={"marginLeft": "8px"}),
                                                 ]
+                                            ),
+                                            html.H4("Selection Details"),
+                                            html.Div(
+                                                id="running-selection-detail",
+                                                children="Click an agent or accident for details.",
                                             ),
                                         ],
                                     )
@@ -377,6 +420,8 @@ def create_app() -> Dash:
                     dcc.Store(id="sim-state"),
                     dcc.Store(id="accident-store", data=[]),
                     dcc.Store(id="selected-agent"),
+                    dcc.Store(id="selected-item"),
+                    dcc.Store(id="view-store"),
                     dcc.Store(id="history-store", data=[]),
                     dcc.Store(id="history-index", data=0),
                 ],
@@ -528,8 +573,9 @@ def create_app() -> Dash:
         Input("sim-state", "data"),
         Input("accident-store", "data"),
         Input("selected-agent", "data"),
+        Input("view-store", "data"),
     )
-    def render_simulation(state, accidents, selected_agent):
+    def render_simulation(state, accidents, selected_agent, view_store):
         if state is None:
             config = SimulationConfig()
             simulation = Simulation(config)
@@ -538,22 +584,31 @@ def create_app() -> Dash:
             return figure, json.dumps(summary, indent=2)
         simulation = _deserialize_sim(state)
         summary = summarize_run(simulation)
-        figure = build_map_figure(simulation, accidents or [], selected_agent)
+        view_bounds = None
+        if view_store:
+            view_bounds = (
+                view_store["x"][0],
+                view_store["x"][1],
+                view_store["y"][0],
+                view_store["y"][1],
+            )
+        figure = build_map_figure(simulation, accidents or [], selected_agent, view_bounds=view_bounds)
         return figure, json.dumps(summary, indent=2)
 
     @app.callback(
         Output("selected-agent", "data"),
+        Output("selected-item", "data"),
         Output("accident-detail", "children"),
         Input("sim-graph", "clickData"),
         State("selected-agent", "data"),
     )
     def handle_click(click_data, selected_agent):
         if not click_data:
-            return dash.no_update, dash.no_update
+            return dash.no_update, dash.no_update, dash.no_update
         point = click_data.get("points", [{}])[0]
         custom = point.get("customdata") or {}
         if custom.get("type") == "agent":
-            return custom.get("agent_id"), dash.no_update
+            return custom.get("agent_id"), {"type": "agent", "agent_id": custom.get("agent_id")}, dash.no_update
         if custom.get("type") == "accident":
             detail = html.Ul(
                 [
@@ -564,8 +619,8 @@ def create_app() -> Dash:
                     html.Li(f"Total claim: {custom.get('total_claim'):.2f}"),
                 ]
             )
-            return dash.no_update, detail
-        return dash.no_update, dash.no_update
+            return dash.no_update, {"type": "accident", **custom}, detail
+        return dash.no_update, dash.no_update, dash.no_update
 
     @app.callback(
         Output("agent-detail", "children"),
@@ -579,18 +634,135 @@ def create_app() -> Dash:
         agent = simulation.agents.get(agent_id)
         if agent is None:
             return "Agent not found."
-        detail = html.Ul(
-            [
+        items = [
+            html.Li(f"Agent #{agent.agent_id}"),
+            html.Li(f"Type: {agent.agent_type}"),
+            html.Li(f"Risk profile: {agent.driver.risk_level}"),
+            html.Li(f"Vehicle: {agent.vehicle.class_name}"),
+            html.Li(f"Home node: {agent.home_node}"),
+            html.Li(f"Work node: {agent.work_node}"),
+            html.Li(f"Destination: {agent.destination_node}"),
+        ]
+        if agent.agent_type == "cyclist":
+            items.append(html.Li(f"Cyclist journey: {agent.home_node} ➜ {agent.destination_node}"))
+            items.append(html.Li(f"Remaining route: {agent.route[agent.route_index:]}"))
+        detail = html.Ul(items)
+        return detail
+
+    @app.callback(
+        Output("running-selection-detail", "children"),
+        Input("selected-item", "data"),
+        State("sim-state", "data"),
+    )
+    def render_running_detail(selected_item, state):
+        if not selected_item:
+            return "Click an agent or accident for details."
+        if selected_item.get("type") == "accident":
+            return html.Ul(
+                [
+                    html.Li(f"Step: {selected_item.get('step')}"),
+                    html.Li(f"Location: {selected_item.get('location')}"),
+                    html.Li(f"Severity: {selected_item.get('severity')}"),
+                    html.Li(f"Participants: {selected_item.get('participants')}"),
+                    html.Li(f"Total claim: {selected_item.get('total_claim'):.2f}"),
+                ]
+            )
+        if selected_item.get("type") == "agent":
+            if state is None:
+                return "No simulation data available."
+            simulation = _deserialize_sim(state)
+            agent = simulation.agents.get(selected_item.get("agent_id"))
+            if agent is None:
+                return "Agent not found."
+            items = [
                 html.Li(f"Agent #{agent.agent_id}"),
                 html.Li(f"Type: {agent.agent_type}"),
-                html.Li(f"Risk profile: {agent.driver.risk_level}"),
-                html.Li(f"Vehicle: {agent.vehicle.class_name}"),
-                html.Li(f"Home node: {agent.home_node}"),
-                html.Li(f"Work node: {agent.work_node}"),
+                html.Li(f"Lane: {agent.lane_index + 1}"),
                 html.Li(f"Destination: {agent.destination_node}"),
             ]
-        )
-        return detail
+            if agent.agent_type == "cyclist":
+                items.append(html.Li(f"Cyclist journey: {agent.home_node} ➜ {agent.destination_node}"))
+            return html.Ul(items)
+        return "Click an agent or accident for details."
+
+    @app.callback(
+        Output("view-store", "data"),
+        Input("zoom-in-btn", "n_clicks"),
+        Input("zoom-out-btn", "n_clicks"),
+        Input("pan-left-btn", "n_clicks"),
+        Input("pan-right-btn", "n_clicks"),
+        Input("pan-up-btn", "n_clicks"),
+        Input("pan-down-btn", "n_clicks"),
+        Input("reset-view-btn", "n_clicks"),
+        State("view-store", "data"),
+        State("sim-state", "data"),
+        prevent_initial_call=True,
+    )
+    def update_view(
+        zoom_in,
+        zoom_out,
+        pan_left,
+        pan_right,
+        pan_up,
+        pan_down,
+        reset_view,
+        view_store,
+        state,
+    ):
+        trigger = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
+        if state is None:
+            simulation = Simulation(SimulationConfig())
+            bounds = _map_bounds(simulation.map_data)
+        else:
+            simulation = _deserialize_sim(state)
+            bounds = _map_bounds(simulation.map_data)
+        if not view_store:
+            min_x, max_x, min_y, max_y = bounds
+            view_store = {"x": [min_x, max_x], "y": [min_y, max_y]}
+        if trigger == "reset-view-btn":
+            min_x, max_x, min_y, max_y = bounds
+            return {"x": [min_x, max_x], "y": [min_y, max_y]}
+        min_x, max_x = view_store["x"]
+        min_y, max_y = view_store["y"]
+        width = max_x - min_x
+        height = max_y - min_y
+        if trigger == "zoom-in-btn":
+            scale = 0.8
+            new_width = width * scale
+            new_height = height * scale
+            center_x = (min_x + max_x) / 2
+            center_y = (min_y + max_y) / 2
+            min_x = center_x - new_width / 2
+            max_x = center_x + new_width / 2
+            min_y = center_y - new_height / 2
+            max_y = center_y + new_height / 2
+        elif trigger == "zoom-out-btn":
+            scale = 1.25
+            new_width = width * scale
+            new_height = height * scale
+            center_x = (min_x + max_x) / 2
+            center_y = (min_y + max_y) / 2
+            min_x = center_x - new_width / 2
+            max_x = center_x + new_width / 2
+            min_y = center_y - new_height / 2
+            max_y = center_y + new_height / 2
+        elif trigger == "pan-left-btn":
+            shift = width * 0.2
+            min_x -= shift
+            max_x -= shift
+        elif trigger == "pan-right-btn":
+            shift = width * 0.2
+            min_x += shift
+            max_x += shift
+        elif trigger == "pan-up-btn":
+            shift = height * 0.2
+            min_y += shift
+            max_y += shift
+        elif trigger == "pan-down-btn":
+            shift = height * 0.2
+            min_y -= shift
+            max_y -= shift
+        return {"x": [min_x, max_x], "y": [min_y, max_y]}
 
     return app
 
@@ -651,6 +823,7 @@ def _serialize_sim(simulation: Simulation) -> dict:
                 "agent_type": agent.agent_type,
                 "heading": list(agent.heading) if agent.heading else None,
                 "lane_index": agent.lane_index,
+                "wait_steps": agent.wait_steps,
             }
         )
     return {
@@ -692,6 +865,7 @@ def _deserialize_sim(state: dict) -> Simulation:
         heading = agent.get("heading")
         sim_agent.heading = tuple(heading) if heading else None
         sim_agent.lane_index = agent.get("lane_index", 0)
+        sim_agent.wait_steps = agent.get("wait_steps", 0)
     return simulation
 
 
