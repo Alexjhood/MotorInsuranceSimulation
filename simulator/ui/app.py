@@ -123,7 +123,7 @@ def build_map_figure(
         "crossing": {"color": "#f1c40f", "size": 9, "symbol": "square-open"},
         "cyclist": {"color": "#2ca02c", "size": 9, "symbol": "triangle-up"},
     }
-    poi_labels = {"residence": "🏠", "work": "🏢", "commerce": "🛍️", "leisure": "🎯"}
+    poi_styles = {
         "residence": {"color": "#1f77b4", "size": 10, "symbol": "square"},
         "work": {"color": "#9467bd", "size": 10, "symbol": "diamond"},
         "commerce": {"color": "#ff7f0e", "size": 10, "symbol": "star"},
@@ -131,6 +131,7 @@ def build_map_figure(
         "crossing": {"color": "#f1c40f", "size": 9, "symbol": "square-open"},
         "cyclist": {"color": "#2ca02c", "size": 9, "symbol": "triangle-up"},
     }
+    poi_labels = {"residence": "🏠", "work": "🏢", "commerce": "🛍️", "leisure": "🎯"}
     for kind, points in nodes_by_kind.items():
         style = node_styles.get(kind, node_styles["junction"])
         fig.add_trace(
@@ -178,10 +179,6 @@ def build_map_figure(
                     name="selected route",
                 )
             )
-            marker=dict(size=11, color="#1f77b4", line=dict(width=1, color="#0b3d91")),
-            name="agents",
-        )
-    )
     if accident_x:
         fig.add_trace(
             go.Scatter(
@@ -270,7 +267,6 @@ def create_app() -> Dash:
         Output("history-store", "data"),
         Output("history-index", "data"),
         Output("tick", "disabled"),
-        Output("selected-agent", "data"),
         Input("start-btn", "n_clicks"),
         Input("pause-btn", "n_clicks"),
         Input("reset-btn", "n_clicks"),
@@ -288,18 +284,18 @@ def create_app() -> Dash:
             new_state = _serialize_sim(sim)
             history = [{"state": new_state, "accidents": []}]
             disabled = False if trigger == "start-btn" else True
-            return new_state, [], history, 0, disabled, None
+            return new_state, [], history, 0, disabled
         if trigger == "pause-btn":
-            return state, dash.no_update, dash.no_update, dash.no_update, True, dash.no_update
+            return state, dash.no_update, dash.no_update, dash.no_update, True
         if trigger == "reset-btn":
             config = _config_from_inputs(seed, agent_count, map_size)
             sim = Simulation(config)
             new_state = _serialize_sim(sim)
             history = [{"state": new_state, "accidents": []}]
-            return new_state, [], history, 0, True, None
+            return new_state, [], history, 0, True
         if trigger == "start-btn":
-            return state, dash.no_update, dash.no_update, dash.no_update, False, dash.no_update
-        return state, dash.no_update, dash.no_update, dash.no_update, False, dash.no_update
+            return state, dash.no_update, dash.no_update, dash.no_update, False
+        return state, dash.no_update, dash.no_update, dash.no_update, False
 
     @app.callback(
         Output("tick", "interval"),
@@ -316,13 +312,6 @@ def create_app() -> Dash:
         Input("tick", "n_intervals"),
         Input("step-btn", "n_clicks"),
         Input("back-btn", "n_clicks"),
-        Input("tick", "n_intervals"),
-        Input("step-btn", "n_clicks"),
-        Input("back-btn", "n_clicks"),
-        Output("summary-output", "children"),
-        Output("sim-state", "data", allow_duplicate=True),
-        Input("tick", "n_intervals"),
-        Input("step-btn", "n_clicks"),
         State("sim-state", "data"),
         State("accident-store", "data"),
         State("history-store", "data"),
@@ -331,7 +320,6 @@ def create_app() -> Dash:
     )
     def advance_simulation(_, __, ___, state, accidents, history, history_index):
         trigger = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
-    def advance_simulation(_, __, state, accidents):
         if state is None:
             config = SimulationConfig()
             simulation = Simulation(config)
@@ -403,15 +391,13 @@ def create_app() -> Dash:
             [
                 html.Li(f"Agent #{agent.agent_id}"),
                 html.Li(f"Risk profile: {agent.driver.risk_level}"),
-                html.Li(f"Vehicle: {agent.vehicle.vehicle_type}"),
+                html.Li(f"Vehicle: {agent.vehicle.class_name}"),
                 html.Li(f"Home node: {agent.home_node}"),
                 html.Li(f"Work node: {agent.work_node}"),
                 html.Li(f"Destination: {agent.destination_node}"),
             ]
         )
         return agent_id, detail
-        figure = build_map_figure(simulation, accidents[-20:])
-        return figure, accidents, json.dumps(summary, indent=2), _serialize_sim(simulation)
 
     return app
 
