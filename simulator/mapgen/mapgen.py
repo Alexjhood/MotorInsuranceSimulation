@@ -108,7 +108,11 @@ class MapGenerator:
                 "leisure": self.config.leisure_count,
             },
         )
-        available_nodes = [nid for nid in nodes if nodes[nid].kind == "junction"]
+        available_nodes = [
+            nid
+            for nid in nodes
+            if nodes[nid].kind == "junction" and (nodes[nid].x, nodes[nid].y) not in trunk_positions
+        ]
         self.random.shuffle(available_nodes)
         pois: Dict[str, List[int]] = {
             "residence": [],
@@ -148,7 +152,7 @@ class MapGenerator:
             node = nodes[node_id]
             for neighbor in neighbors:
                 neighbor_node = nodes[neighbor]
-                if self._is_highway_edge(node, neighbor_node, trunk_positions):
+                if self._is_highway_edge(node, neighbor_node, trunk_positions, clusters, cluster_radius):
                     road_type = "highway"
                 else:
                     local_single, local_two = self._local_lane_weights(
@@ -398,10 +402,31 @@ class MapGenerator:
         node: Node,
         neighbor: Node,
         trunk_positions: set[Tuple[int, int]],
+        clusters: Dict[str, List[Tuple[int, int]]],
+        cluster_radius: int,
     ) -> bool:
-        if (node.x, node.y) in trunk_positions and (neighbor.x, neighbor.y) in trunk_positions:
-            return True
-        return False
+        if (node.x, node.y) not in trunk_positions or (neighbor.x, neighbor.y) not in trunk_positions:
+            return False
+        allowed_kinds = {"junction", "roundabout", "major_junction", "minor_junction"}
+        if node.kind not in allowed_kinds or neighbor.kind not in allowed_kinds:
+            return False
+        if self._in_cluster_core(node, clusters, cluster_radius) or self._in_cluster_core(
+            neighbor, clusters, cluster_radius
+        ):
+            return False
+        return True
+
+    def _in_cluster_core(
+        self,
+        node: Node,
+        clusters: Dict[str, List[Tuple[int, int]]],
+        cluster_radius: int,
+    ) -> bool:
+        centers = clusters.get(node.district, [])
+        if not centers:
+            return False
+        closest = min(abs(node.x - cx) + abs(node.y - cy) for cx, cy in centers)
+        return closest <= cluster_radius
 
     def _ensure_district_capacity(
         self,
