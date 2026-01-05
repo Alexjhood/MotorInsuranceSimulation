@@ -12,7 +12,7 @@ class Node:
     node_id: int
     x: int
     y: int
-    kind: str = "junction"  # junction, roundabout, residence, work, visit
+    kind: str = "junction"  # junction, roundabout, residence, work, commerce, leisure, crossing, cyclist
 
 
 @dataclass
@@ -21,6 +21,10 @@ class Edge:
     end: int
     speed_limit: int
     risk_factor: float
+    road_type: str
+    lanes: int
+    has_cycle_lane: bool
+    has_crossing: bool
 
 
 @dataclass
@@ -50,17 +54,6 @@ class MapGenerator:
                 adjacency[node_id] = []
                 node_id += 1
 
-        node_positions = {(node.x, node.y): node_id for node_id, node in nodes.items()}
-        for node in nodes.values():
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                neighbor = node_positions.get((node.x + dx, node.y + dy))
-                if neighbor is None:
-                    continue
-                speed_limit = self.random.choice(self.config.speed_limits)
-                risk_factor = self.random.uniform(0.8, 1.4)
-                edges.append(Edge(start=node.node_id, end=neighbor, speed_limit=speed_limit, risk_factor=risk_factor))
-                adjacency[node.node_id].append(neighbor)
-
         node_ids = list(nodes.keys())
         self.random.shuffle(node_ids)
         roundabouts = node_ids[: self.config.roundabout_count]
@@ -70,11 +63,21 @@ class MapGenerator:
         poi_sets = {
             "residence": self.config.residential_count,
             "work": self.config.work_count,
-            "visit": self.config.visit_count,
+            "commerce": self.config.commerce_count,
+            "leisure": self.config.leisure_count,
+            "crossing": self.config.pedestrian_crossing_count,
+            "cyclist": self.config.cyclist_hub_count,
         }
         available_nodes = [nid for nid in nodes if nodes[nid].kind == "junction"]
         self.random.shuffle(available_nodes)
-        pois: Dict[str, List[int]] = {"residence": [], "work": [], "visit": []}
+        pois: Dict[str, List[int]] = {
+            "residence": [],
+            "work": [],
+            "commerce": [],
+            "leisure": [],
+            "crossing": [],
+            "cyclist": [],
+        }
         idx = 0
         for kind, count in poi_sets.items():
             for _ in range(count):
@@ -84,6 +87,34 @@ class MapGenerator:
                 nodes[node_id].kind = kind
                 pois[kind].append(node_id)
                 idx += 1
+
+        node_positions = {(node.x, node.y): node_id for node_id, node in nodes.items()}
+        road_types = list(self.config.road_type_weights.keys())
+        road_weights = list(self.config.road_type_weights.values())
+        for node in nodes.values():
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                neighbor = node_positions.get((node.x + dx, node.y + dy))
+                if neighbor is None:
+                    continue
+                road_type = self.random.choices(road_types, weights=road_weights, k=1)[0]
+                speed_limit = self.config.speed_limits_by_type.get(road_type, 30)
+                lanes = self.config.lanes_by_type.get(road_type, 1)
+                risk_factor = self.random.uniform(0.8, 1.4)
+                has_crossing = node.kind == "crossing" or nodes[neighbor].kind == "crossing"
+                has_cycle_lane = self.random.random() < self.config.cycle_lane_chance
+                edges.append(
+                    Edge(
+                        start=node.node_id,
+                        end=neighbor,
+                        speed_limit=speed_limit,
+                        risk_factor=risk_factor,
+                        road_type=road_type,
+                        lanes=lanes,
+                        has_cycle_lane=has_cycle_lane,
+                        has_crossing=has_crossing,
+                    )
+                )
+                adjacency[node.node_id].append(neighbor)
 
         return MapData(nodes=nodes, edges=edges, adjacency=adjacency, pois=pois)
 

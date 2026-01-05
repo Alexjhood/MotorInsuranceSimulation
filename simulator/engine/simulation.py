@@ -70,7 +70,11 @@ class Simulation:
             )
 
     def _select_destination(self, agent: AgentState) -> int:
-        choices = [agent.home_node, agent.work_node] + self.map_data.pois.get("visit", [])
+        choices = (
+            [agent.home_node, agent.work_node]
+            + self.map_data.pois.get("commerce", [])
+            + self.map_data.pois.get("leisure", [])
+        )
         return self.random.choice(choices)
 
     def _advance_agent(self, agent: AgentState) -> Dict[str, float | int | None]:
