@@ -23,6 +23,7 @@ def _run_single(seed: int, config: SimulationConfig) -> RunResult:
         steps=config.steps,
         map_config=config.map_config,
         driver_config=config.driver_config,
+        accident_config=config.accident_config,
         time_of_day=config.time_of_day,
         enable_parallel=False,
         parallel_workers=config.parallel_workers,

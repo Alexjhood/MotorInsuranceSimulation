@@ -584,6 +584,11 @@ class MapGenerator:
             "cyclist": [],
         }
         
+        # First, add all nodes that already have POI types (e.g., residences created in _populate_cluster)
+        for nid, node in nodes.items():
+            if node.kind in pois:
+                pois[node.kind].append(nid)
+        
         # Map cluster types to POI types
         cluster_to_poi = {
             "residential": "residence",

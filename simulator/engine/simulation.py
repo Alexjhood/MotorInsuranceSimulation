@@ -21,6 +21,7 @@ class AgentState:
     driver: DriverProfile
     vehicle: VehicleProfile
     home_node: int
+    home_label: str  # Label for the home location (e.g., "H1", "H2")
     work_node: int
     destination_node: int
     previous_node: int
@@ -28,6 +29,7 @@ class AgentState:
     heading: Tuple[int, int] | None
     lane_index: int
     wait_steps: int
+    is_idle: bool = True  # True when agent is not on a journey
 
 
 @dataclass
@@ -39,12 +41,7 @@ class SimulationStepResult:
 
 class Simulation:
     def __init__(self, config: SimulationConfig) -> None:
-        # Ensure minimum residences can accommodate drivers
-        if config.map_config.min_residences < config.driver_config.count:
-            map_config = replace(config.map_config, min_residences=config.driver_config.count)
-            self.config = replace(config, map_config=map_config)
-        else:
-            self.config = config
+        self.config = config
         self.random = random.Random(config.seed)
         self.map_data = MapGenerator(self.config.map_config, self.config.seed).generate()
         self.edge_lookup = {(edge.start, edge.end): edge for edge in self.map_data.edges}
@@ -64,59 +61,59 @@ class Simulation:
     def _init_agents(self) -> None:
         risk_levels = list(self.config.driver_config.risk_profiles.keys())
         risk_weights = list(self.config.driver_config.risk_profiles.values())
-        available_homes = list(self.map_data.pois.get("residence", []))
-        self.random.shuffle(available_homes)
+        
+        # Create one driver agent AND one cyclist per home (residence)
+        all_homes = list(self.map_data.pois.get("residence", []))
         agent_id = 0
-        for _ in range(self.config.driver_config.count):
+        
+        for home_index, home_node in enumerate(all_homes):
+            home_label = f"H{home_index + 1}"  # Home labels: H1, H2, H3, etc.
+            
+            # Create driver for this home
             risk_level = self.random.choices(risk_levels, weights=risk_weights, k=1)[0]
             driver = build_driver(risk_level)
             vehicle_class = self.random.choice(VEHICLE_CLASSES)
             vehicle = VehicleProfile(*vehicle_class)
-            home_node = available_homes.pop() if available_homes else self._pick_node("residence")
             work_node = self._pick_node("work")
-            route = self._find_route(home_node, work_node)
+            
             self.agents[agent_id] = AgentState(
                 agent_id=agent_id,
                 current_node=home_node,
-                route=route,
+                route=[home_node],
                 route_index=0,
                 driver=driver,
                 vehicle=vehicle,
                 home_node=home_node,
+                home_label=home_label,
                 work_node=work_node,
-                destination_node=work_node,
+                destination_node=home_node,
                 previous_node=home_node,
                 agent_type="driver",
                 heading=None,
                 lane_index=0,
-                wait_steps=self._node_wait_steps(home_node),
+                wait_steps=0,
+                is_idle=True,
             )
             agent_id += 1
-
-        cyclist_hubs = list(self.map_data.pois.get("cyclist", []))
-        self.random.shuffle(cyclist_hubs)
-        for _ in range(self.config.driver_config.cyclist_count):
-            if cyclist_hubs:
-                home_node = cyclist_hubs.pop()
-            else:
-                home_node = self._pick_node("cyclist")
-            destination_node = self._pick_node("commerce")
-            route = self._find_route(home_node, destination_node)
+            
+            # Create cyclist for this home
             self.agents[agent_id] = AgentState(
                 agent_id=agent_id,
                 current_node=home_node,
-                route=route,
+                route=[home_node],
                 route_index=0,
                 driver=build_driver("low"),
                 vehicle=BICYCLE_PROFILE,
                 home_node=home_node,
-                work_node=destination_node,
-                destination_node=destination_node,
+                home_label=home_label,
+                work_node=self._pick_node("commerce"),
+                destination_node=home_node,
                 previous_node=home_node,
                 agent_type="cyclist",
                 heading=None,
                 lane_index=0,
-                wait_steps=self._node_wait_steps(home_node),
+                wait_steps=0,
+                is_idle=True,
             )
             agent_id += 1
 
@@ -125,41 +122,74 @@ class Simulation:
         return 1 if node_kind in {"roundabout", "major_junction"} else 0
 
     def _select_destination(self, agent: AgentState) -> int:
+        """Select a destination for the agent. Can include other homes."""
         commerce = self.map_data.pois.get("commerce", [])
         leisure = self.map_data.pois.get("leisure", [])
         cyclist_hubs = self.map_data.pois.get("cyclist", [])
+        residences = self.map_data.pois.get("residence", [])
+        work_locations = self.map_data.pois.get("work", [])
+        
+        # Filter out current location from options
+        other_homes = [h for h in residences if h != agent.current_node]
+        
         if agent.agent_type == "cyclist":
-            options = leisure + commerce + cyclist_hubs
+            options = leisure + commerce + cyclist_hubs + other_homes
             return self.random.choice(options) if options else agent.home_node
-        if agent.destination_node == agent.work_node:
-            options = commerce + leisure
-            return self.random.choice(options) if options else agent.home_node
-        if agent.destination_node in commerce + leisure:
-            return agent.home_node
-        return agent.work_node
-        choices = (
-            [agent.home_node, agent.work_node]
-            + self.map_data.pois.get("commerce", [])
-            + self.map_data.pois.get("leisure", [])
-        )
-        return self.random.choice(choices)
+        
+        # For drivers, select from various location types
+        if agent.current_node == agent.home_node:
+            # From home, can go to work, commerce, leisure, or visit other homes
+            options = work_locations + commerce + leisure + other_homes
+        elif agent.current_node == agent.work_node:
+            # From work, go to commerce, leisure, other homes, or back home
+            options = commerce + leisure + other_homes + [agent.home_node]
+        else:
+            # From other locations, go home or to another destination
+            options = [agent.home_node] + commerce + leisure + other_homes
+        
+        return self.random.choice(options) if options else agent.home_node
 
     def _advance_agent(self, agent: AgentState) -> Dict[str, float | int | None]:
+        # Handle wait steps (at junctions/roundabouts)
         if agent.wait_steps > 0:
             agent.wait_steps -= 1
             return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "wait"}
+        
+        # Handle idle agents (not currently on a journey)
+        if agent.is_idle:
+            # Use agent-type-specific journey start probability
+            if agent.agent_type == "cyclist":
+                journey_prob = self.config.driver_config.cyclist_journey_start_probability
+            else:
+                journey_prob = self.config.driver_config.journey_start_probability
+            
+            if self.random.random() < journey_prob:
+                # Start a new journey
+                agent.destination_node = self._select_destination(agent)
+                agent.route = self._find_route(agent.current_node, agent.destination_node)
+                agent.route_index = 0
+                agent.is_idle = False
+            else:
+                # Stay idle
+                return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "idle"}
+        
+        # Check if journey is complete
         if agent.route_index + 1 >= len(agent.route):
-            agent.destination_node = self._select_destination(agent)
-            agent.route = self._find_route(agent.current_node, agent.destination_node)
-            agent.route_index = 0
+            # Arrived at destination, become idle
+            agent.is_idle = True
+            return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "arrived"}
+        
+        # Continue journey
         next_index = min(agent.route_index + 1, len(agent.route) - 1)
         next_node = agent.route[next_index]
         current_node = self.map_data.nodes[agent.current_node]
         target_node = self.map_data.nodes[next_node]
         desired_heading = (target_node.x - current_node.x, target_node.y - current_node.y)
+        
         if agent.heading is None or agent.heading != desired_heading:
             agent.heading = desired_heading
             return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "turn"}
+        
         agent.route_index = next_index
         agent.previous_node = agent.current_node
         agent.current_node = next_node
@@ -180,15 +210,27 @@ class Simulation:
         for agent in self.agents.values():
             node_occupancy.setdefault(agent.current_node, []).append(agent.agent_id)
 
-        for node_id, agents in node_occupancy.items():
-            if len(agents) < 1:
+        for node_id, agents_at_node in node_occupancy.items():
+            if len(agents_at_node) < 1:
                 continue
+            
             edge = self._edge_for_node(node_id)
-            for agent_id in agents:
+            multiplier = self._compute_accident_multiplier(node_id, edge)
+            accident_config = self.config.accident_config
+            
+            # Only check accidents for agents that are actively moving (not idle)
+            active_agents = [aid for aid in agents_at_node if not self.agents[aid].is_idle]
+            
+            # Unilateral accidents - only for drivers (cyclists cannot have unilateral accidents)
+            active_drivers = [aid for aid in active_agents if self.agents[aid].agent_type == "driver"]
+            for agent_id in active_drivers:
                 agent = self.agents[agent_id]
                 rng = random.Random(self.config.seed + self.step_index * 1000 + agent_id)
-                probability = accident_probability(edge, agent.driver, self.config.time_of_day)
-                if rng.random() < probability:
+                
+                # Base unilateral probability with multipliers
+                unilateral_prob = accident_config.unilateral_probability * multiplier
+                
+                if rng.random() < unilateral_prob:
                     speed = edge.speed_limit * agent.driver.speed_bias
                     accident = build_accident(
                         step=self.step_index,
@@ -201,25 +243,53 @@ class Simulation:
                     )
                     accidents.append(accident)
 
-            if len(agents) > 1:
-                collision_probability = min(0.02 * len(agents), 0.15)
+            # Multi-agent encounters
+            if len(active_agents) > 1:
                 rng = random.Random(self.config.seed + self.step_index * 2000 + node_id)
-                if rng.random() < collision_probability:
-                    participant_ids = agents[:2]
-                    profiles = [self.agents[pid].driver for pid in participant_ids]
-                    vehicles = [self.agents[pid].vehicle for pid in participant_ids]
-                    speed = edge.speed_limit * sum(profile.speed_bias for profile in profiles) / len(profiles)
-                    accidents.append(
-                        build_accident(
-                            step=self.step_index,
-                            location=node_id,
-                            participant_ids=participant_ids,
-                            driver_profiles=profiles,
-                            vehicle_profiles=vehicles,
-                            speed=speed,
-                            rng=rng,
+                
+                # Separate drivers from cyclists
+                drivers = [aid for aid in active_agents if self.agents[aid].agent_type == "driver"]
+                cyclists = [aid for aid in active_agents if self.agents[aid].agent_type == "cyclist"]
+                
+                # Vehicle-vehicle encounters
+                if len(drivers) > 1:
+                    vehicle_prob = accident_config.vehicle_encounter_probability * multiplier
+                    if rng.random() < vehicle_prob:
+                        participant_ids = drivers[:2]
+                        profiles = [self.agents[pid].driver for pid in participant_ids]
+                        vehicles = [self.agents[pid].vehicle for pid in participant_ids]
+                        speed = edge.speed_limit * sum(p.speed_bias for p in profiles) / len(profiles)
+                        accidents.append(
+                            build_accident(
+                                step=self.step_index,
+                                location=node_id,
+                                participant_ids=participant_ids,
+                                driver_profiles=profiles,
+                                vehicle_profiles=vehicles,
+                                speed=speed,
+                                rng=rng,
+                            )
                         )
-                    )
+                
+                # Vehicle-cyclist encounters
+                if drivers and cyclists:
+                    cyclist_prob = accident_config.cyclist_encounter_probability * multiplier
+                    if rng.random() < cyclist_prob:
+                        participant_ids = [drivers[0], cyclists[0]]
+                        profiles = [self.agents[pid].driver for pid in participant_ids]
+                        vehicles = [self.agents[pid].vehicle for pid in participant_ids]
+                        speed = edge.speed_limit * self.agents[drivers[0]].driver.speed_bias
+                        accidents.append(
+                            build_accident(
+                                step=self.step_index,
+                                location=node_id,
+                                participant_ids=participant_ids,
+                                driver_profiles=profiles,
+                                vehicle_profiles=vehicles,
+                                speed=speed,
+                                rng=rng,
+                            )
+                        )
 
         for accident in accidents:
             step_events.append({
@@ -240,6 +310,19 @@ class Simulation:
             if edge.start == node_id:
                 return edge
         return self.map_data.edges[0]
+
+    def _compute_accident_multiplier(self, node_id: int, edge: "Edge") -> float:
+        """Compute the combined multiplier based on road type and junction type."""
+        accident_config = self.config.accident_config
+        
+        # Road type multiplier
+        road_multiplier = accident_config.road_type_multipliers.get(edge.road_type, 1.0)
+        
+        # Junction type multiplier
+        node = self.map_data.nodes[node_id]
+        junction_multiplier = accident_config.junction_multipliers.get(node.kind, 1.0)
+        
+        return road_multiplier * junction_multiplier
 
     def _build_navigation_graph(self, map_data: MapData) -> Dict[int, List[Tuple[int, float]]]:
         adjacency: Dict[int, List[Tuple[int, float]]] = {node_id: [] for node_id in map_data.nodes}

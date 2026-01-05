@@ -46,9 +46,36 @@ class MapConfig:
 
 
 @dataclass(frozen=True)
+class AccidentConfig:
+    # Base accident probabilities
+    unilateral_probability: float = 0.01  # Per agent per step
+    vehicle_encounter_probability: float = 0.03  # When encountering another vehicle
+    cyclist_encounter_probability: float = 0.03  # When encountering a cyclist
+    
+    # Road type multipliers
+    road_type_multipliers: Dict[str, float] = field(
+        default_factory=lambda: {
+            "single_lane": 2.0,
+            "dual_carriageway": 1.0,
+            "highway": 0.5,
+        }
+    )
+    
+    # Junction type multipliers
+    junction_multipliers: Dict[str, float] = field(
+        default_factory=lambda: {
+            "roundabout": 5.0,
+            "major_junction": 5.0,
+            "minor_junction": 1.0,
+            "highway_junction": 1.0,
+        }
+    )
+
+
+@dataclass(frozen=True)
 class DriverConfig:
-    count: int = 20
-    cyclist_count: int = 6
+    journey_start_probability: float = 0.05  # Probability per step for drivers to start a new journey when idle
+    cyclist_journey_start_probability: float = 0.01  # Probability per step for cyclists to start a new journey when idle
     risk_profiles: Dict[str, float] = field(
         default_factory=lambda: {"low": 0.35, "medium": 0.45, "high": 0.2}
     )
@@ -60,6 +87,7 @@ class SimulationConfig:
     steps: int = 200
     map_config: MapConfig = field(default_factory=MapConfig)
     driver_config: DriverConfig = field(default_factory=DriverConfig)
+    accident_config: AccidentConfig = field(default_factory=AccidentConfig)
     time_of_day: str = "day"
     enable_parallel: bool = False
     parallel_workers: int = 2

@@ -12,9 +12,46 @@ from dash.dependencies import Input, Output, State
 import plotly.graph_objects as go
 
 from simulator.accidents.model import AccidentEvent
-from simulator.config import DriverConfig, MapConfig, SimulationConfig
+from simulator.config import AccidentConfig, DriverConfig, MapConfig, SimulationConfig
 from simulator.engine.simulation import Simulation
 from simulator.reporting.summary import summarize_run
+
+
+def log_to_linear(log_val: float, min_val: float, max_val: float) -> float:
+    """Convert log scale slider value to linear probability."""
+    if log_val <= 0:
+        return min_val
+    # Map slider range [0, 1] to log space [log(min), log(max)]
+    log_min = math.log10(min_val) if min_val > 0 else -4
+    log_max = math.log10(max_val)
+    linear_log = log_min + log_val * (log_max - log_min)
+    return 10 ** linear_log
+
+
+def linear_to_log(linear_val: float, min_val: float, max_val: float) -> float:
+    """Convert linear probability to log scale slider value."""
+    if linear_val <= min_val:
+        return 0.0
+    if linear_val >= max_val:
+        return 1.0
+    log_min = math.log10(min_val) if min_val > 0 else -4
+    log_max = math.log10(max_val)
+    linear_log = math.log10(linear_val)
+    return (linear_log - log_min) / (log_max - log_min)
+
+
+def format_probability_tooltip(log_val: float, min_val: float, max_val: float) -> str:
+    """Format a log scale slider value as a probability percentage for tooltip."""
+    prob = log_to_linear(log_val, min_val, max_val)
+    pct = prob * 100
+    if pct >= 10:
+        return f"{pct:.1f}%"
+    elif pct >= 1:
+        return f"{pct:.2f}%"
+    elif pct >= 0.1:
+        return f"{pct:.2f}%"
+    else:
+        return f"{pct:.3f}%"
 
 
 def build_map_figure(
@@ -81,6 +118,10 @@ def build_map_figure(
     cyclist_labels = []
     cyclist_customdata = []
     for agent in simulation.agents.values():
+        # Only show agents that are on a journey (not idle)
+        if agent.is_idle:
+            continue
+        
         node = map_data.nodes[agent.current_node]
         offset_x, offset_y, angle = _agent_position_offset(
             map_data,
@@ -92,11 +133,13 @@ def build_map_figure(
         )
         x = node.x + offset_x
         y = node.y + offset_y
-        label = f"A{agent.agent_id}" if show_agent_labels else ""
+        # Label agents by their home address
+        label = agent.home_label if show_agent_labels else ""
         custom = {
             "type": "agent",
             "agent_id": agent.agent_id,
             "agent_kind": agent.agent_type,
+            "home_label": agent.home_label,
             "lane": agent.lane_index + 1,
         }
         if agent.agent_type == "cyclist":
@@ -120,10 +163,13 @@ def build_map_figure(
     destination_y = []
     destination_labels = []
     for agent in simulation.agents.values():
+        # Only show destinations for agents on journeys
+        if agent.is_idle:
+            continue
         destination_node = map_data.nodes[agent.destination_node]
         destination_x.append(destination_node.x)
         destination_y.append(destination_node.y)
-        destination_labels.append(f"D{agent.agent_id}" if show_destination_labels else "")
+        destination_labels.append(f"{agent.home_label}->" if show_destination_labels else "")
 
     for accident in accidents:
         node = map_data.nodes[accident["location"]]
@@ -334,24 +380,6 @@ def create_app() -> Dash:
                                                     ),
                                                 ],
                                             ),
-                                            html.Label("Driver Agents"),
-                                            dcc.Input(
-                                                id="agent-count",
-                                                type="number",
-                                                value=20,
-                                                min=1,
-                                                max=200,
-                                                step=1,
-                                            ),
-                                            html.Label("Cyclists"),
-                                            dcc.Input(
-                                                id="cyclist-count",
-                                                type="number",
-                                                value=6,
-                                                min=0,
-                                                max=200,
-                                                step=1,
-                                            ),
                                             html.Label("Map Scale"),
                                             dcc.Input(
                                                 id="map-scale-input",
@@ -433,6 +461,100 @@ def create_app() -> Dash:
                                                 step=0.02,
                                                 value=0.14,
                                                 marks={0.0: "0%", 0.2: "20%", 0.4: "40%"},
+                                            ),
+                                            html.Hr(),
+                                            html.H4("Journey & Accident Settings"),
+                                            html.Label("Driver Journey Start Probability (per step when idle)"),
+                                            html.Div(
+                                                id="journey-start-prob-display",
+                                                style={"fontSize": "12px", "color": "#666", "marginBottom": "4px"}
+                                            ),
+                                            dcc.Slider(
+                                                id="journey-start-prob",
+                                                min=0.0,
+                                                max=1.0,
+                                                step=0.01,
+                                                value=linear_to_log(0.05, 0.0001, 1.0),
+                                                marks={
+                                                    0.0: "0.01%",
+                                                    0.25: "0.1%",
+                                                    0.5: "1%",
+                                                    0.75: "10%",
+                                                    1.0: "100%"
+                                                }
+                                            ),
+                                            html.Label("Cyclist Journey Start Probability (per step when idle)"),
+                                            html.Div(
+                                                id="cyclist-journey-start-prob-display",
+                                                style={"fontSize": "12px", "color": "#666", "marginBottom": "4px"}
+                                            ),
+                                            dcc.Slider(
+                                                id="cyclist-journey-start-prob",
+                                                min=0.0,
+                                                max=1.0,
+                                                step=0.01,
+                                                value=linear_to_log(0.01, 0.0001, 1.0),
+                                                marks={
+                                                    0.0: "0.01%",
+                                                    0.25: "0.1%",
+                                                    0.5: "1%",
+                                                    0.75: "10%",
+                                                    1.0: "100%"
+                                                }
+                                            ),
+                                            html.Label("Unilateral Accident Probability (per agent per step)"),
+                                            html.Div(
+                                                id="unilateral-prob-display",
+                                                style={"fontSize": "12px", "color": "#666", "marginBottom": "4px"}
+                                            ),
+                                            dcc.Slider(
+                                                id="unilateral-prob",
+                                                min=0.0,
+                                                max=1.0,
+                                                step=0.01,
+                                                value=linear_to_log(0.01, 0.0001, 0.1),
+                                                marks={
+                                                    0.0: "0.01%",
+                                                    0.33: "0.1%",
+                                                    0.67: "1%",
+                                                    1.0: "10%"
+                                                }
+                                            ),
+                                            html.Label("Vehicle Encounter Accident Probability"),
+                                            html.Div(
+                                                id="vehicle-encounter-prob-display",
+                                                style={"fontSize": "12px", "color": "#666", "marginBottom": "4px"}
+                                            ),
+                                            dcc.Slider(
+                                                id="vehicle-encounter-prob",
+                                                min=0.0,
+                                                max=1.0,
+                                                step=0.01,
+                                                value=linear_to_log(0.03, 0.0001, 0.1),
+                                                marks={
+                                                    0.0: "0.01%",
+                                                    0.33: "0.1%",
+                                                    0.67: "1%",
+                                                    1.0: "10%"
+                                                }
+                                            ),
+                                            html.Label("Cyclist Encounter Accident Probability"),
+                                            html.Div(
+                                                id="cyclist-encounter-prob-display",
+                                                style={"fontSize": "12px", "color": "#666", "marginBottom": "4px"}
+                                            ),
+                                            dcc.Slider(
+                                                id="cyclist-encounter-prob",
+                                                min=0.0,
+                                                max=1.0,
+                                                step=0.01,
+                                                value=linear_to_log(0.03, 0.0001, 0.1),
+                                                marks={
+                                                    0.0: "0.01%",
+                                                    0.33: "0.1%",
+                                                    0.67: "1%",
+                                                    1.0: "10%"
+                                                }
                                             ),
                                             html.Div(
                                                 style={"display": "flex", "justifyContent": "flex-end"},
@@ -586,8 +708,6 @@ def create_app() -> Dash:
         Input("reset-btn", "n_clicks"),
         Input("setup-reset-btn", "n_clicks"),
         State("seed-input", "value"),
-        State("agent-count", "value"),
-        State("cyclist-count", "value"),
         State("map-scale-input", "value"),
         State("cluster-lambda", "value"),
         State("homes-lambda", "value"),
@@ -597,6 +717,11 @@ def create_app() -> Dash:
         State("roundabout-chance", "value"),
         State("highway-roundabout-chance", "value"),
         State("major-junction-ratio", "value"),
+        State("journey-start-prob", "value"),
+        State("cyclist-journey-start-prob", "value"),
+        State("unilateral-prob", "value"),
+        State("vehicle-encounter-prob", "value"),
+        State("cyclist-encounter-prob", "value"),
         State("sim-state", "data"),
         prevent_initial_call=True,
     )
@@ -606,8 +731,6 @@ def create_app() -> Dash:
         reset,
         setup_reset,
         seed,
-        agent_count,
-        cyclist_count,
         map_scale,
         cluster_lambda,
         homes_lambda,
@@ -617,14 +740,17 @@ def create_app() -> Dash:
         roundabout_chance,
         highway_roundabout_chance,
         major_junction_ratio,
+        journey_start_prob,
+        cyclist_journey_start_prob,
+        unilateral_prob,
+        vehicle_encounter_prob,
+        cyclist_encounter_prob,
         state,
     ):
         trigger = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
         if state is None:
             config = _config_from_inputs(
                 seed,
-                agent_count,
-                cyclist_count,
                 map_scale,
                 cluster_lambda,
                 homes_lambda,
@@ -634,6 +760,11 @@ def create_app() -> Dash:
                 roundabout_chance,
                 highway_roundabout_chance,
                 major_junction_ratio,
+                journey_start_prob,
+                cyclist_journey_start_prob,
+                unilateral_prob,
+                vehicle_encounter_prob,
+                cyclist_encounter_prob,
             )
             sim = Simulation(config)
             new_state = _serialize_sim(sim)
@@ -645,8 +776,6 @@ def create_app() -> Dash:
         if trigger in {"reset-btn", "setup-reset-btn"}:
             config = _config_from_inputs(
                 seed,
-                agent_count,
-                cyclist_count,
                 map_scale,
                 cluster_lambda,
                 homes_lambda,
@@ -656,6 +785,11 @@ def create_app() -> Dash:
                 roundabout_chance,
                 highway_roundabout_chance,
                 major_junction_ratio,
+                journey_start_prob,
+                cyclist_journey_start_prob,
+                unilateral_prob,
+                vehicle_encounter_prob,
+                cyclist_encounter_prob,
             )
             sim = Simulation(config)
             new_state = _serialize_sim(sim)
@@ -931,13 +1065,56 @@ def create_app() -> Dash:
             max_y -= shift
         return {"x": [min_x, max_x], "y": [min_y, max_y]}
 
+    @app.callback(
+        Output("journey-start-prob-display", "children"),
+        Input("journey-start-prob", "value"),
+    )
+    def update_journey_prob_display(log_val):
+        if log_val is None:
+            log_val = linear_to_log(0.05, 0.0001, 1.0)
+        return f"Selected: {format_probability_tooltip(log_val, 0.0001, 1.0)}"
+
+    @app.callback(
+        Output("cyclist-journey-start-prob-display", "children"),
+        Input("cyclist-journey-start-prob", "value"),
+    )
+    def update_cyclist_journey_prob_display(log_val):
+        if log_val is None:
+            log_val = linear_to_log(0.01, 0.0001, 1.0)
+        return f"Selected: {format_probability_tooltip(log_val, 0.0001, 1.0)}"
+
+    @app.callback(
+        Output("unilateral-prob-display", "children"),
+        Input("unilateral-prob", "value"),
+    )
+    def update_unilateral_prob_display(log_val):
+        if log_val is None:
+            log_val = linear_to_log(0.01, 0.0001, 0.1)
+        return f"Selected: {format_probability_tooltip(log_val, 0.0001, 0.1)}"
+
+    @app.callback(
+        Output("vehicle-encounter-prob-display", "children"),
+        Input("vehicle-encounter-prob", "value"),
+    )
+    def update_vehicle_encounter_prob_display(log_val):
+        if log_val is None:
+            log_val = linear_to_log(0.03, 0.0001, 0.1)
+        return f"Selected: {format_probability_tooltip(log_val, 0.0001, 0.1)}"
+
+    @app.callback(
+        Output("cyclist-encounter-prob-display", "children"),
+        Input("cyclist-encounter-prob", "value"),
+    )
+    def update_cyclist_encounter_prob_display(log_val):
+        if log_val is None:
+            log_val = linear_to_log(0.03, 0.0001, 0.1)
+        return f"Selected: {format_probability_tooltip(log_val, 0.0001, 0.1)}"
+
     return app
 
 
 def _config_from_inputs(
     seed: int,
-    agent_count: int,
-    cyclist_count: int,
     map_scale: float,
     cluster_lambda: float,
     homes_lambda: float,
@@ -947,6 +1124,11 @@ def _config_from_inputs(
     roundabout_chance: float,
     highway_roundabout_chance: float,
     major_junction_ratio: float,
+    journey_start_probability: float = 0.05,
+    cyclist_journey_start_probability: float = 0.01,
+    unilateral_probability: float = 0.01,
+    vehicle_encounter_probability: float = 0.03,
+    cyclist_encounter_probability: float = 0.03,
 ) -> SimulationConfig:
     map_config = MapConfig(
         cluster_lambda=cluster_lambda if cluster_lambda is not None else 1.0,
@@ -959,8 +1141,28 @@ def _config_from_inputs(
         highway_merge_roundabout_chance=highway_roundabout_chance if highway_roundabout_chance is not None else 0.4,
         major_junction_ratio=major_junction_ratio if major_junction_ratio is not None else 0.14,
     )
-    driver_config = DriverConfig(count=agent_count or 20, cyclist_count=cyclist_count or 0)
-    return SimulationConfig(seed=seed or 42, map_config=map_config, driver_config=driver_config)
+    # Convert log scale slider values to linear probabilities
+    journey_start_probability = log_to_linear(journey_start_probability, 0.0001, 1.0) if journey_start_probability is not None else 0.05
+    cyclist_journey_start_probability = log_to_linear(cyclist_journey_start_probability, 0.0001, 1.0) if cyclist_journey_start_probability is not None else 0.01
+    unilateral_probability = log_to_linear(unilateral_probability, 0.0001, 0.1) if unilateral_probability is not None else 0.01
+    vehicle_encounter_probability = log_to_linear(vehicle_encounter_probability, 0.0001, 0.1) if vehicle_encounter_probability is not None else 0.03
+    cyclist_encounter_probability = log_to_linear(cyclist_encounter_probability, 0.0001, 0.1) if cyclist_encounter_probability is not None else 0.03
+    
+    driver_config = DriverConfig(
+        journey_start_probability=journey_start_probability,
+        cyclist_journey_start_probability=cyclist_journey_start_probability,
+    )
+    accident_config = AccidentConfig(
+        unilateral_probability=unilateral_probability,
+        vehicle_encounter_probability=vehicle_encounter_probability,
+        cyclist_encounter_probability=cyclist_encounter_probability,
+    )
+    return SimulationConfig(
+        seed=seed or 42,
+        map_config=map_config,
+        driver_config=driver_config,
+        accident_config=accident_config,
+    )
 
 
 def _serialize_sim(simulation: Simulation) -> dict:
@@ -975,6 +1177,7 @@ def _serialize_sim(simulation: Simulation) -> dict:
                 "driver": asdict(agent.driver),
                 "vehicle": asdict(agent.vehicle),
                 "home_node": agent.home_node,
+                "home_label": agent.home_label,
                 "work_node": agent.work_node,
                 "destination_node": agent.destination_node,
                 "previous_node": agent.previous_node,
@@ -982,6 +1185,7 @@ def _serialize_sim(simulation: Simulation) -> dict:
                 "heading": list(agent.heading) if agent.heading else None,
                 "lane_index": agent.lane_index,
                 "wait_steps": agent.wait_steps,
+                "is_idle": agent.is_idle,
             }
         )
     return {
@@ -993,6 +1197,7 @@ def _serialize_sim(simulation: Simulation) -> dict:
             "pois": simulation.map_data.pois,
         },
         "step_index": simulation.step_index,
+        "random_state": [simulation.random.getstate()[0], list(simulation.random.getstate()[1]), simulation.random.getstate()[2]],
         "agents": agents,
         "accidents": [accident.__dict__ for accident in simulation.accidents],
     }
@@ -1000,17 +1205,28 @@ def _serialize_sim(simulation: Simulation) -> dict:
 
 def _deserialize_sim(state: dict) -> Simulation:
     config_data = state["config"]
+    driver_config_data = config_data["driver_config"].copy()
+    # Handle legacy configs that may have old fields
+    for legacy_field in ["count", "cyclist_count"]:
+        if legacy_field in driver_config_data:
+            del driver_config_data[legacy_field]
+    accident_config_data = config_data.get("accident_config", {})
     config = SimulationConfig(
         seed=config_data["seed"],
         steps=config_data["steps"],
         map_config=MapConfig(**config_data["map_config"]),
-        driver_config=DriverConfig(**config_data["driver_config"]),
+        driver_config=DriverConfig(**driver_config_data),
+        accident_config=AccidentConfig(**accident_config_data) if accident_config_data else AccidentConfig(),
         time_of_day=config_data.get("time_of_day", "day"),
         enable_parallel=config_data.get("enable_parallel", False),
         parallel_workers=config_data.get("parallel_workers", 2),
     )
     simulation = Simulation(config)
     simulation.step_index = state["step_index"]
+    # Restore random state to preserve randomness across serialize/deserialize
+    if "random_state" in state:
+        rs = state["random_state"]
+        simulation.random.setstate((rs[0], tuple(rs[1]), rs[2]))
     simulation.accidents = [AccidentEvent(**accident) for accident in state.get("accidents", [])]
     for agent in state["agents"]:
         sim_agent = simulation.agents[agent["agent_id"]]
@@ -1024,6 +1240,8 @@ def _deserialize_sim(state: dict) -> Simulation:
         sim_agent.heading = tuple(heading) if heading else None
         sim_agent.lane_index = agent.get("lane_index", 0)
         sim_agent.wait_steps = agent.get("wait_steps", 0)
+        sim_agent.is_idle = agent.get("is_idle", True)
+        sim_agent.home_label = agent.get("home_label", sim_agent.home_label)
     return simulation
 
 
