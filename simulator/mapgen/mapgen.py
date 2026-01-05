@@ -13,7 +13,7 @@ class Node:
     x: int
     y: int
     kind: str = "junction"  # junction, major_junction, minor_junction, roundabout, residence, work, commerce, leisure, crossing, cyclist
-    district: str = "mixed"  # residential, commercial, work, mixed
+    district: str = "mixed"  # residential, commerce, work, leisure, mixed
 
 
 @dataclass
@@ -96,6 +96,18 @@ class MapGenerator:
             "crossing": self.config.pedestrian_crossing_count,
             "cyclist": self.config.cyclist_hub_count,
         }
+        self._ensure_district_capacity(
+            nodes,
+            adjacency,
+            node_positions,
+            clusters,
+            {
+                "residential": self.config.residential_count,
+                "work": self.config.work_count,
+                "commerce": self.config.commerce_count,
+                "leisure": self.config.leisure_count,
+            },
+        )
         available_nodes = [nid for nid in nodes if nodes[nid].kind == "junction"]
         self.random.shuffle(available_nodes)
         pois: Dict[str, List[int]] = {
@@ -106,41 +118,49 @@ class MapGenerator:
             "crossing": [],
             "cyclist": [],
         }
-        idx = 0
         def _filter_by_district(options: List[int], target: str) -> List[int]:
             return [nid for nid in options if nodes[nid].district == target]
 
         for kind, count in poi_sets.items():
             for _ in range(count):
-                if idx >= len(available_nodes):
+                if not available_nodes:
                     break
                 if kind == "residence":
-                    candidates = _filter_by_district(available_nodes[idx:], "residential")
-                elif kind in {"commerce", "leisure", "crossing", "cyclist"}:
-                    candidates = _filter_by_district(available_nodes[idx:], "commercial")
+                    candidates = _filter_by_district(available_nodes, "residential")
+                elif kind == "commerce":
+                    candidates = _filter_by_district(available_nodes, "commerce")
+                elif kind == "leisure":
+                    candidates = _filter_by_district(available_nodes, "leisure")
+                elif kind in {"crossing", "cyclist"}:
+                    candidates = _filter_by_district(available_nodes, "commerce")
                 elif kind == "work":
-                    candidates = _filter_by_district(available_nodes[idx:], "work")
+                    candidates = _filter_by_district(available_nodes, "work")
                 else:
-                    candidates = available_nodes[idx:]
-                node_id = candidates[0] if candidates else available_nodes[idx]
+                    candidates = available_nodes
+                node_id = self.random.choice(candidates) if candidates else available_nodes[0]
                 nodes[node_id].kind = kind
                 pois[kind].append(node_id)
-                idx += 1
+                available_nodes.remove(node_id)
 
         intensity = max(0.0, min(self.config.lane_intensity, 1.0))
         single_weight, two_weight = self._lane_weights(intensity)
-        highway_radius = 1 + int(intensity * 2)
-        trunk_buffer = self._expand_trunk_buffer(trunk_positions, node_positions, highway_radius)
         for node_id, neighbors in adjacency.items():
             node = nodes[node_id]
             for neighbor in neighbors:
                 neighbor_node = nodes[neighbor]
-                if self._is_highway_edge(node, neighbor_node, trunk_positions, trunk_buffer):
+                if self._is_highway_edge(node, neighbor_node, trunk_positions):
                     road_type = "highway"
                 else:
+                    local_single, local_two = self._local_lane_weights(
+                        node.district,
+                        neighbor_node.district,
+                        intensity,
+                        single_weight,
+                        two_weight,
+                    )
                     road_type = self.random.choices(
                         ["single_lane", "two_lane"],
-                        weights=[single_weight, two_weight],
+                        weights=[local_single, local_two],
                         k=1,
                     )[0]
                 speed_limit = self.config.speed_limits_by_type.get(road_type, 30)
@@ -174,15 +194,16 @@ class MapGenerator:
     ) -> set[Tuple[int, int]]:
         trunk_positions: set[Tuple[int, int]] = set()
         residential = clusters.get("residential", [])
-        commercial = clusters.get("commercial", [])
+        commercial = clusters.get("commerce", [])
         work = clusters.get("work", [])
-        centers = [*residential, *commercial, *work]
+        leisure = clusters.get("leisure", [])
+        centers = [*residential, *commercial, *work, *leisure]
         trunk_pairs: List[Tuple[Tuple[int, int], Tuple[int, int]]] = []
         if len(centers) >= 2:
             ordered = centers[:]
             self.random.shuffle(ordered)
             trunk_pairs.extend(zip(ordered, ordered[1:]))
-            extra_connections = int(len(centers) * max(0.0, min(self.config.lane_intensity, 1.0)))
+            extra_connections = max(1, int(len(centers) * 0.4))
             for _ in range(extra_connections):
                 start, end = self.random.sample(centers, 2)
                 trunk_pairs.append((start, end))
@@ -203,7 +224,6 @@ class MapGenerator:
             for x, y in self._manhattan_path(start, end):
                 ensure_node(x, y)
                 trunk_positions.add((x, y))
-        trunk_positions = self._expand_trunk_network(trunk_positions, node_positions, ensure_node)
         return trunk_positions
 
     def _manhattan_path(self, start: Tuple[int, int], end: Tuple[int, int]) -> List[Tuple[int, int]]:
@@ -243,21 +263,21 @@ class MapGenerator:
             node.kind = "major_junction" if node_id in major_set else "minor_junction"
 
     def _build_clusters(self) -> Dict[str, List[Tuple[int, int]]]:
-        largest = max(self.config.width, self.config.height)
-        if largest < 16:
-            cluster_count = 1
-        elif largest < 24:
-            cluster_count = 2
-        else:
-            cluster_count = 3
-        total_clusters = cluster_count * 3
+        cluster_counts = {
+            "residential": self._clamp_cluster_count(self.config.residential_cluster_count),
+            "work": self._clamp_cluster_count(self.config.work_cluster_count),
+            "commerce": self._clamp_cluster_count(self.config.commerce_cluster_count),
+            "leisure": self._clamp_cluster_count(self.config.leisure_cluster_count),
+        }
+        total_clusters = sum(cluster_counts.values())
         min_distance = max(4, min(self.config.width, self.config.height) // 3)
         centers = self._pick_cluster_centers(total_clusters, min_distance)
-        return {
-            "residential": centers[:cluster_count],
-            "commercial": centers[cluster_count : cluster_count * 2],
-            "work": centers[cluster_count * 2 : cluster_count * 3],
-        }
+        cluster_map: Dict[str, List[Tuple[int, int]]] = {}
+        index = 0
+        for kind, count in cluster_counts.items():
+            cluster_map[kind] = centers[index : index + count]
+            index += count
+        return cluster_map
 
     def _assign_cluster(self, node: Node, clusters: Dict[str, List[Tuple[int, int]]]) -> str:
         best_kind = "residential"
@@ -269,6 +289,9 @@ class MapGenerator:
                     best_distance = distance
                     best_kind = kind
         return best_kind
+
+    def _clamp_cluster_count(self, count: int) -> int:
+        return max(1, min(count, self.config.width * self.config.height))
 
     def _pick_cluster_centers(self, total_clusters: int, min_distance: int) -> List[Tuple[int, int]]:
         centers: List[Tuple[int, int]] = []
@@ -346,60 +369,91 @@ class MapGenerator:
         total = single_lane + two_lane
         return single_lane / total, two_lane / total
 
-    def _expand_trunk_network(
+    def _local_lane_weights(
         self,
-        trunk_positions: set[Tuple[int, int]],
-        node_positions: Dict[Tuple[int, int], int],
-        ensure_node,
-    ) -> set[Tuple[int, int]]:
-        intensity = max(0.0, min(self.config.lane_intensity, 1.0))
-        radius = 1 + int(intensity * 2)
-        expanded = set(trunk_positions)
-        for x, y in list(trunk_positions):
-            for dx in range(-radius, radius + 1):
-                for dy in range(-radius, radius + 1):
-                    if abs(dx) + abs(dy) > radius:
-                        continue
-                    nx = x + dx
-                    ny = y + dy
-                    if 0 <= nx < self.config.width and 0 <= ny < self.config.height:
-                        ensure_node(nx, ny)
-                        expanded.add((nx, ny))
-        return expanded
-
-    def _expand_trunk_buffer(
-        self,
-        trunk_positions: set[Tuple[int, int]],
-        node_positions: Dict[Tuple[int, int], int],
-        radius: int,
-    ) -> set[Tuple[int, int]]:
-        buffer: set[Tuple[int, int]] = set()
-        for x, y in trunk_positions:
-            for dx in range(-radius, radius + 1):
-                for dy in range(-radius, radius + 1):
-                    if abs(dx) + abs(dy) > radius:
-                        continue
-                    nx = x + dx
-                    ny = y + dy
-                    if (nx, ny) in node_positions:
-                        buffer.add((nx, ny))
-        return buffer
+        district_a: str,
+        district_b: str,
+        intensity: float,
+        base_single: float,
+        base_two: float,
+    ) -> Tuple[float, float]:
+        single = base_single
+        two = base_two
+        if district_a == district_b == "residential":
+            single *= 1.4
+            two *= 0.6
+        elif district_a == district_b and district_a in {"work", "commerce", "leisure"}:
+            single *= 0.6
+            two *= 1.4
+        elif district_a != district_b:
+            single *= 0.9
+            two *= 1.1
+        if intensity > 0.7:
+            two *= 1.1
+        total = single + two
+        return single / total, two / total
 
     def _is_highway_edge(
         self,
         node: Node,
         neighbor: Node,
         trunk_positions: set[Tuple[int, int]],
-        trunk_buffer: set[Tuple[int, int]],
     ) -> bool:
         if (node.x, node.y) in trunk_positions and (neighbor.x, neighbor.y) in trunk_positions:
             return True
-        if node.district != neighbor.district:
-            return True
-        if (node.x, node.y) in trunk_buffer or (neighbor.x, neighbor.y) in trunk_buffer:
-            intensity = max(0.0, min(self.config.lane_intensity, 1.0))
-            return self.random.random() < 0.2 + 0.6 * intensity
         return False
+
+    def _ensure_district_capacity(
+        self,
+        nodes: Dict[int, Node],
+        adjacency: Dict[int, List[int]],
+        node_positions: Dict[Tuple[int, int], int],
+        clusters: Dict[str, List[Tuple[int, int]]],
+        required_by_district: Dict[str, int],
+    ) -> None:
+        for district, required in required_by_district.items():
+            current = sum(
+                1
+                for node in nodes.values()
+                if node.kind == "junction" and node.district == district
+            )
+            deficit = max(0, required - current)
+            for _ in range(deficit):
+                position = self._pick_adjacent_position(clusters.get(district, []), node_positions)
+                if position is None:
+                    break
+                node_id = max(nodes.keys(), default=-1) + 1
+                nodes[node_id] = Node(node_id=node_id, x=position[0], y=position[1], district=district)
+                adjacency[node_id] = []
+                node_positions[position] = node_id
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    neighbor_pos = (position[0] + dx, position[1] + dy)
+                    neighbor_id = node_positions.get(neighbor_pos)
+                    if neighbor_id is not None:
+                        adjacency[node_id].append(neighbor_id)
+                        adjacency.setdefault(neighbor_id, []).append(node_id)
+
+    def _pick_adjacent_position(
+        self,
+        centers: List[Tuple[int, int]],
+        node_positions: Dict[Tuple[int, int], int],
+    ) -> Tuple[int, int] | None:
+        adjacent_positions = set()
+        for x, y in node_positions:
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx = x + dx
+                ny = y + dy
+                if 0 <= nx < self.config.width and 0 <= ny < self.config.height:
+                    if (nx, ny) not in node_positions:
+                        adjacent_positions.add((nx, ny))
+        if not adjacent_positions:
+            return None
+        if not centers:
+            return self.random.choice(list(adjacent_positions))
+        def _distance(candidate: Tuple[int, int]) -> int:
+            cx, cy = min(centers, key=lambda center: abs(candidate[0] - center[0]) + abs(candidate[1] - center[1]))
+            return abs(candidate[0] - cx) + abs(candidate[1] - cy)
+        return min(adjacent_positions, key=_distance)
 
 
 def shortest_path(adjacency: Dict[int, List[int]], start: int, goal: int) -> List[int]:

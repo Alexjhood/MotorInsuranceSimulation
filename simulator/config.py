@@ -12,9 +12,13 @@ class MapConfig:
     roundabout_ratio: float = 0.08
     major_junction_ratio: float = 0.14
     residential_count: int = 12
+    residential_cluster_count: int = 2
     work_count: int = 6
+    work_cluster_count: int = 2
     commerce_count: int = 6
+    commerce_cluster_count: int = 2
     leisure_count: int = 6
+    leisure_cluster_count: int = 2
     pedestrian_crossing_count: int = 6
     cyclist_hub_count: int = 5
     lane_intensity: float = 0.5

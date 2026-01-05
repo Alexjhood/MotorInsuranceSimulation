@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 import math
+import random
 from typing import List, Tuple
 
 import dash
@@ -26,9 +27,9 @@ def build_map_figure(
     map_data = simulation.map_data
     edge_lookup = {(edge.start, edge.end): edge for edge in map_data.edges}
     edge_styles = {
-        "single_lane": {"color": "#c0c4cc", "width": 1.5},
-        "two_lane": {"color": "#9aa0a6", "width": 2.5},
-        "highway": {"color": "#5f6368", "width": 3.5},
+        "single_lane": {"color": "#c0c4cc", "width": 1.4},
+        "two_lane": {"color": "#9aa0a6", "width": 2.2},
+        "highway": {"color": "#5f6368", "width": 2.6},
     }
     edge_coords = {key: {"x": [], "y": []} for key in edge_styles}
     cycle_x: list[float] = []
@@ -178,9 +179,19 @@ def build_map_figure(
         )
 
     node_styles = {
-        "major_junction": {"color": "#5f6368", "size": 7, "symbol": "circle"},
-        "minor_junction": {"color": "#c2c5cc", "size": 5, "symbol": "circle"},
-        "roundabout": {"color": "#8d99ae", "size": 10, "symbol": "circle-open"},
+        "major_junction": {
+            "color": "#495057",
+            "size": 14,
+            "symbol": "circle",
+            "line": {"width": 2, "color": "#343a40"},
+        },
+        "minor_junction": {"color": "#c2c5cc", "size": 6, "symbol": "circle"},
+        "roundabout": {
+            "color": "#8d99ae",
+            "size": 18,
+            "symbol": "circle-open-dot",
+            "line": {"width": 2, "color": "#6c757d"},
+        },
         "residence": {"color": "#1f77b4", "size": 12, "symbol": "square"},
         "work": {"color": "#9467bd", "size": 12, "symbol": "diamond"},
         "commerce": {"color": "#ff7f0e", "size": 12, "symbol": "star"},
@@ -200,12 +211,15 @@ def build_map_figure(
     for kind, points in nodes_by_kind.items():
         style = node_styles.get(kind, node_styles["minor_junction"])
         mode = "markers+text" if show_poi_labels else "markers"
+        marker = dict(size=style["size"], color=style["color"], symbol=style["symbol"])
+        if style.get("line"):
+            marker["line"] = style["line"]
         fig.add_trace(
             go.Scatter(
                 x=[point[0] for point in points],
                 y=[point[1] for point in points],
                 mode=mode,
-                marker=dict(size=style["size"], color=style["color"], symbol=style["symbol"]),
+                marker=marker,
                 text=[poi_labels.get(kind, "") if show_poi_labels else "" for _ in points],
                 textposition="top center",
                 name=kind.replace("_", " "),
@@ -316,11 +330,44 @@ def create_app() -> Dash:
                                         style={"display": "flex", "flexDirection": "column", "gap": "8px"},
                                         children=[
                                             html.Label("Seed"),
-                                            dcc.Input(id="seed-input", type="number", value=42),
+                                            html.Div(
+                                                style={
+                                                    "display": "flex",
+                                                    "gap": "8px",
+                                                    "alignItems": "center",
+                                                },
+                                                children=[
+                                                    dcc.Input(
+                                                        id="seed-input",
+                                                        type="number",
+                                                        value=42,
+                                                        style={"flex": "1"},
+                                                    ),
+                                                    html.Button(
+                                                        "Randomize",
+                                                        id="seed-random-btn",
+                                                        title="Generate a random seed",
+                                                    ),
+                                                ],
+                                            ),
                                             html.Label("Driver Agents"),
-                                            dcc.Slider(id="agent-count", min=5, max=60, step=1, value=20),
+                                            dcc.Input(
+                                                id="agent-count",
+                                                type="number",
+                                                value=20,
+                                                min=1,
+                                                max=200,
+                                                step=1,
+                                            ),
                                             html.Label("Cyclists"),
-                                            dcc.Slider(id="cyclist-count", min=0, max=30, step=1, value=6),
+                                            dcc.Input(
+                                                id="cyclist-count",
+                                                type="number",
+                                                value=6,
+                                                min=0,
+                                                max=200,
+                                                step=1,
+                                            ),
                                             html.Label("Map Size"),
                                             dcc.Dropdown(
                                                 id="map-size",
@@ -331,14 +378,50 @@ def create_app() -> Dash:
                                                 ],
                                                 value="medium",
                                             ),
-                                            html.Label("Homes"),
+                                            html.Label("Homes (count)"),
                                             dcc.Input(id="homes-count", type="number", value=12),
-                                            html.Label("Work Places"),
+                                            html.Label("Home Clusters"),
+                                            dcc.Input(
+                                                id="homes-cluster-count",
+                                                type="number",
+                                                value=2,
+                                                min=1,
+                                                max=6,
+                                                step=1,
+                                            ),
+                                            html.Label("Work Places (count)"),
                                             dcc.Input(id="work-count", type="number", value=6),
-                                            html.Label("Commercial Places"),
+                                            html.Label("Work Clusters"),
+                                            dcc.Input(
+                                                id="work-cluster-count",
+                                                type="number",
+                                                value=2,
+                                                min=1,
+                                                max=6,
+                                                step=1,
+                                            ),
+                                            html.Label("Commercial Places (count)"),
                                             dcc.Input(id="commerce-count", type="number", value=6),
-                                            html.Label("Leisure Places"),
+                                            html.Label("Commercial Clusters"),
+                                            dcc.Input(
+                                                id="commerce-cluster-count",
+                                                type="number",
+                                                value=2,
+                                                min=1,
+                                                max=6,
+                                                step=1,
+                                            ),
+                                            html.Label("Leisure Places (count)"),
                                             dcc.Input(id="leisure-count", type="number", value=6),
+                                            html.Label("Leisure Clusters"),
+                                            dcc.Input(
+                                                id="leisure-cluster-count",
+                                                type="number",
+                                                value=2,
+                                                min=1,
+                                                max=6,
+                                                step=1,
+                                            ),
                                             html.Label("Lane Intensity"),
                                             dcc.Slider(
                                                 id="lane-intensity",
@@ -522,9 +605,13 @@ def create_app() -> Dash:
         State("cyclist-count", "value"),
         State("map-size", "value"),
         State("homes-count", "value"),
+        State("homes-cluster-count", "value"),
         State("work-count", "value"),
+        State("work-cluster-count", "value"),
         State("commerce-count", "value"),
+        State("commerce-cluster-count", "value"),
         State("leisure-count", "value"),
+        State("leisure-cluster-count", "value"),
         State("lane-intensity", "value"),
         State("roundabout-ratio", "value"),
         State("major-junction-ratio", "value"),
@@ -541,9 +628,13 @@ def create_app() -> Dash:
         cyclist_count,
         map_size,
         homes_count,
+        homes_cluster_count,
         work_count,
+        work_cluster_count,
         commerce_count,
+        commerce_cluster_count,
         leisure_count,
+        leisure_cluster_count,
         lane_intensity,
         roundabout_ratio,
         major_junction_ratio,
@@ -557,9 +648,13 @@ def create_app() -> Dash:
                 cyclist_count,
                 map_size,
                 homes_count,
+                homes_cluster_count,
                 work_count,
+                work_cluster_count,
                 commerce_count,
+                commerce_cluster_count,
                 leisure_count,
+                leisure_cluster_count,
                 lane_intensity,
                 roundabout_ratio,
                 major_junction_ratio,
@@ -578,9 +673,13 @@ def create_app() -> Dash:
                 cyclist_count,
                 map_size,
                 homes_count,
+                homes_cluster_count,
                 work_count,
+                work_cluster_count,
                 commerce_count,
+                commerce_cluster_count,
                 leisure_count,
+                leisure_cluster_count,
                 lane_intensity,
                 roundabout_ratio,
                 major_junction_ratio,
@@ -599,6 +698,14 @@ def create_app() -> Dash:
     )
     def update_tick_interval(speed: float) -> int:
         return max(int(1000 / max(speed or 1, 0.5)), 100)
+
+    @app.callback(
+        Output("seed-input", "value"),
+        Input("seed-random-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def randomize_seed(_):
+        return random.randint(1, 9999)
 
     @app.callback(
         Output("sim-state", "data", allow_duplicate=True),
@@ -860,9 +967,13 @@ def _config_from_inputs(
     cyclist_count: int,
     map_size: str,
     homes_count: int,
+    homes_cluster_count: int,
     work_count: int,
+    work_cluster_count: int,
     commerce_count: int,
+    commerce_cluster_count: int,
     leisure_count: int,
+    leisure_cluster_count: int,
     lane_intensity: float,
     roundabout_ratio: float,
     major_junction_ratio: float,
@@ -873,19 +984,33 @@ def _config_from_inputs(
         "large": (28, 20),
     }
     width, height = size_map.get(map_size, (20, 14))
+    default_cluster_count = _default_cluster_count(width, height)
     map_config = MapConfig(
         width=width,
         height=height,
         residential_count=homes_count or 12,
+        residential_cluster_count=homes_cluster_count or default_cluster_count,
         work_count=work_count or 6,
+        work_cluster_count=work_cluster_count or default_cluster_count,
         commerce_count=commerce_count or 6,
+        commerce_cluster_count=commerce_cluster_count or default_cluster_count,
         leisure_count=leisure_count or 6,
+        leisure_cluster_count=leisure_cluster_count or default_cluster_count,
         lane_intensity=lane_intensity if lane_intensity is not None else 0.5,
         roundabout_ratio=roundabout_ratio if roundabout_ratio is not None else 0.08,
         major_junction_ratio=major_junction_ratio if major_junction_ratio is not None else 0.14,
     )
-    driver_config = DriverConfig(count=agent_count, cyclist_count=cyclist_count or 0)
+    driver_config = DriverConfig(count=agent_count or 20, cyclist_count=cyclist_count or 0)
     return SimulationConfig(seed=seed or 42, map_config=map_config, driver_config=driver_config)
+
+
+def _default_cluster_count(width: int, height: int) -> int:
+    largest = max(width, height)
+    if largest < 16:
+        return 1
+    if largest < 24:
+        return 2
+    return 3
 
 
 def _serialize_sim(simulation: Simulation) -> dict:
