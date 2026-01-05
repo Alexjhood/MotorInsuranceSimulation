@@ -16,3 +16,5 @@ VEHICLE_CLASSES = [
     ("suv", 35000.0, 1.1),
     ("truck", 42000.0, 1.2),
 ]
+
+BICYCLE_PROFILE = VehicleProfile(class_name="bicycle", value=800.0, safety_rating=0.6)

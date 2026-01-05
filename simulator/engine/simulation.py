@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import random
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from simulator.accidents.model import AccidentEvent, accident_probability, build_accident
 from simulator.agents.driver import DriverProfile, build_driver
-from simulator.agents.vehicle import VEHICLE_CLASSES, VehicleProfile
+from simulator.agents.vehicle import BICYCLE_PROFILE, VEHICLE_CLASSES, VehicleProfile
 from simulator.config import SimulationConfig
 from simulator.mapgen.mapgen import MapData, MapGenerator, shortest_path
 
@@ -23,6 +23,9 @@ class AgentState:
     work_node: int
     destination_node: int
     previous_node: int
+    agent_type: str
+    heading: Tuple[int, int] | None
+    lane_index: int
 
 
 @dataclass
@@ -41,6 +44,8 @@ class Simulation:
             self.config = config
         self.random = random.Random(config.seed)
         self.map_data = MapGenerator(self.config.map_config, self.config.seed).generate()
+        self.edge_lookup = {(edge.start, edge.end): edge for edge in self.map_data.edges}
+        self.nav_adjacency = self._build_navigation_graph(self.map_data)
         self.agents: Dict[int, AgentState] = {}
         self.step_index = 0
         self.event_log: List[dict] = []
@@ -58,14 +63,15 @@ class Simulation:
         risk_weights = list(self.config.driver_config.risk_profiles.values())
         available_homes = list(self.map_data.pois.get("residence", []))
         self.random.shuffle(available_homes)
-        for agent_id in range(self.config.driver_config.count):
+        agent_id = 0
+        for _ in range(self.config.driver_config.count):
             risk_level = self.random.choices(risk_levels, weights=risk_weights, k=1)[0]
             driver = build_driver(risk_level)
             vehicle_class = self.random.choice(VEHICLE_CLASSES)
             vehicle = VehicleProfile(*vehicle_class)
             home_node = available_homes.pop() if available_homes else self._pick_node("residence")
             work_node = self._pick_node("work")
-            route = shortest_path(self.map_data.adjacency, home_node, work_node)
+            route = shortest_path(self.nav_adjacency, home_node, work_node)
             self.agents[agent_id] = AgentState(
                 agent_id=agent_id,
                 current_node=home_node,
@@ -77,11 +83,45 @@ class Simulation:
                 work_node=work_node,
                 destination_node=work_node,
                 previous_node=home_node,
+                agent_type="driver",
+                heading=None,
+                lane_index=0,
             )
+            agent_id += 1
+
+        cyclist_hubs = list(self.map_data.pois.get("cyclist", []))
+        self.random.shuffle(cyclist_hubs)
+        for _ in range(self.config.driver_config.cyclist_count):
+            if cyclist_hubs:
+                home_node = cyclist_hubs.pop()
+            else:
+                home_node = self._pick_node("cyclist")
+            destination_node = self._pick_node("commerce")
+            route = shortest_path(self.nav_adjacency, home_node, destination_node)
+            self.agents[agent_id] = AgentState(
+                agent_id=agent_id,
+                current_node=home_node,
+                route=route,
+                route_index=0,
+                driver=build_driver("low"),
+                vehicle=BICYCLE_PROFILE,
+                home_node=home_node,
+                work_node=destination_node,
+                destination_node=destination_node,
+                previous_node=home_node,
+                agent_type="cyclist",
+                heading=None,
+                lane_index=0,
+            )
+            agent_id += 1
 
     def _select_destination(self, agent: AgentState) -> int:
         commerce = self.map_data.pois.get("commerce", [])
         leisure = self.map_data.pois.get("leisure", [])
+        cyclist_hubs = self.map_data.pois.get("cyclist", [])
+        if agent.agent_type == "cyclist":
+            options = leisure + commerce + cyclist_hubs
+            return self.random.choice(options) if options else agent.home_node
         if agent.destination_node == agent.work_node:
             options = commerce + leisure
             return self.random.choice(options) if options else agent.home_node
@@ -98,14 +138,23 @@ class Simulation:
     def _advance_agent(self, agent: AgentState) -> Dict[str, float | int | None]:
         if agent.route_index + 1 >= len(agent.route):
             agent.destination_node = self._select_destination(agent)
-            agent.route = shortest_path(self.map_data.adjacency, agent.current_node, agent.destination_node)
+            agent.route = shortest_path(self.nav_adjacency, agent.current_node, agent.destination_node)
             agent.route_index = 0
         next_index = min(agent.route_index + 1, len(agent.route) - 1)
         next_node = agent.route[next_index]
+        current_node = self.map_data.nodes[agent.current_node]
+        target_node = self.map_data.nodes[next_node]
+        desired_heading = (target_node.x - current_node.x, target_node.y - current_node.y)
+        if agent.heading is None:
+            agent.heading = desired_heading
+        if agent.heading != desired_heading:
+            agent.heading = desired_heading
+            return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "turn"}
         agent.route_index = next_index
         agent.previous_node = agent.current_node
         agent.current_node = next_node
-        return {"agent_id": agent.agent_id, "node": next_node}
+        agent.heading = desired_heading
+        return {"agent_id": agent.agent_id, "node": next_node, "action": "move"}
 
     def step(self) -> SimulationStepResult:
         self.step_index += 1
@@ -114,6 +163,7 @@ class Simulation:
 
         movements = [self._advance_agent(agent) for agent in self.agents.values()]
         step_events.extend({"type": "movement", **movement, "step": self.step_index} for movement in movements)
+        self._assign_lanes()
 
         node_occupancy: Dict[int, List[int]] = {}
         for agent in self.agents.values():
@@ -179,6 +229,26 @@ class Simulation:
             if edge.start == node_id:
                 return edge
         return self.map_data.edges[0]
+
+    def _build_navigation_graph(self, map_data: MapData) -> Dict[int, List[int]]:
+        adjacency: Dict[int, List[int]] = {node_id: [] for node_id in map_data.nodes}
+        for edge in map_data.edges:
+            if edge.has_cycle_lane:
+                continue
+            adjacency[edge.start].append(edge.end)
+        return adjacency
+
+    def _assign_lanes(self) -> None:
+        edge_groups: Dict[Tuple[int, int], List[int]] = {}
+        for agent in self.agents.values():
+            if agent.previous_node != agent.current_node:
+                edge_groups.setdefault((agent.previous_node, agent.current_node), []).append(agent.agent_id)
+
+        for edge_key, agent_ids in edge_groups.items():
+            edge = self.edge_lookup.get(edge_key)
+            lanes = edge.lanes if edge else 1
+            for idx, agent_id in enumerate(sorted(agent_ids)):
+                self.agents[agent_id].lane_index = idx % max(lanes, 1)
 
     def run(self, steps: int | None = None) -> List[SimulationStepResult]:
         if steps is None:
