@@ -43,6 +43,8 @@ def build_map_figure(
         for offset in lane_offsets:
             coords["x"] += [start.x + perp_x * offset, end.x + perp_x * offset, None]
             coords["y"] += [start.y + perp_y * offset, end.y + perp_y * offset, None]
+        coords["x"] += [start.x, end.x, None]
+        coords["y"] += [start.y, end.y, None]
         if edge.has_cycle_lane:
             cycle_x += [start.x, end.x, None]
             cycle_y += [start.y, end.y, None]
@@ -61,6 +63,9 @@ def build_map_figure(
             x += dx
             y += dy
         nodes_by_kind.setdefault(node.kind, []).append((x, y))
+    nodes_by_kind: dict[str, list[tuple[int, int]]] = {}
+    for node in map_data.nodes.values():
+        nodes_by_kind.setdefault(node.kind, []).append((node.x, node.y))
 
     agent_x = []
     agent_y = []
@@ -119,6 +124,13 @@ def build_map_figure(
         "cyclist": {"color": "#2ca02c", "size": 9, "symbol": "triangle-up"},
     }
     poi_labels = {"residence": "🏠", "work": "🏢", "commerce": "🛍️", "leisure": "🎯"}
+        "residence": {"color": "#1f77b4", "size": 10, "symbol": "square"},
+        "work": {"color": "#9467bd", "size": 10, "symbol": "diamond"},
+        "commerce": {"color": "#ff7f0e", "size": 10, "symbol": "star"},
+        "leisure": {"color": "#e377c2", "size": 10, "symbol": "hexagon"},
+        "crossing": {"color": "#f1c40f", "size": 9, "symbol": "square-open"},
+        "cyclist": {"color": "#2ca02c", "size": 9, "symbol": "triangle-up"},
+    }
     for kind, points in nodes_by_kind.items():
         style = node_styles.get(kind, node_styles["junction"])
         fig.add_trace(
@@ -166,6 +178,10 @@ def build_map_figure(
                     name="selected route",
                 )
             )
+            marker=dict(size=11, color="#1f77b4", line=dict(width=1, color="#0b3d91")),
+            name="agents",
+        )
+    )
     if accident_x:
         fig.add_trace(
             go.Scatter(
@@ -300,6 +316,10 @@ def create_app() -> Dash:
         Input("tick", "n_intervals"),
         Input("step-btn", "n_clicks"),
         Input("back-btn", "n_clicks"),
+        Output("summary-output", "children"),
+        Output("sim-state", "data", allow_duplicate=True),
+        Input("tick", "n_intervals"),
+        Input("step-btn", "n_clicks"),
         State("sim-state", "data"),
         State("accident-store", "data"),
         State("history-store", "data"),
@@ -308,6 +328,7 @@ def create_app() -> Dash:
     )
     def advance_simulation(_, __, ___, state, accidents, history, history_index):
         trigger = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
+    def advance_simulation(_, __, state, accidents):
         if state is None:
             config = SimulationConfig()
             simulation = Simulation(config)
@@ -386,6 +407,8 @@ def create_app() -> Dash:
             ]
         )
         return agent_id, detail
+        figure = build_map_figure(simulation, accidents[-20:])
+        return figure, accidents, json.dumps(summary, indent=2), _serialize_sim(simulation)
 
     return app
 

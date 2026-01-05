@@ -88,6 +88,12 @@ class Simulation:
         if agent.destination_node in commerce + leisure:
             return agent.home_node
         return agent.work_node
+        choices = (
+            [agent.home_node, agent.work_node]
+            + self.map_data.pois.get("commerce", [])
+            + self.map_data.pois.get("leisure", [])
+        )
+        return self.random.choice(choices)
 
     def _advance_agent(self, agent: AgentState) -> Dict[str, float | int | None]:
         if agent.route_index + 1 >= len(agent.route):
