@@ -47,20 +47,20 @@ class MapGenerator:
         edges: List[Edge] = []
 
         node_id = 0
-        district_width = max(1, self.config.width // 3)
         for y in range(self.config.height):
             for x in range(self.config.width):
                 if self.random.random() > self.config.road_density:
                     continue
-                if x < district_width:
-                    district = "residential"
-                elif x < district_width * 2:
-                    district = "commercial"
-                else:
-                    district = "work"
-                nodes[node_id] = Node(node_id=node_id, x=x, y=y, district=district)
+                nodes[node_id] = Node(node_id=node_id, x=x, y=y)
                 adjacency[node_id] = []
                 node_id += 1
+
+        if not nodes:
+            return MapData(nodes=nodes, edges=edges, adjacency=adjacency, pois={})
+
+        clusters = self._build_clusters(list(nodes.values()))
+        for node in nodes.values():
+            node.district = self._assign_cluster(node, clusters)
 
         node_ids = list(nodes.keys())
         self.random.shuffle(node_ids)
@@ -108,8 +108,9 @@ class MapGenerator:
                 idx += 1
 
         node_positions = {(node.x, node.y): node_id for node_id, node in nodes.items()}
-        road_types = list(self.config.road_type_weights.keys())
-        road_weights = list(self.config.road_type_weights.values())
+        single_weight = self.config.road_type_weights.get("single_lane", 0.6)
+        two_weight = self.config.road_type_weights.get("two_lane", 0.4)
+        total_weight = single_weight + two_weight or 1.0
         for node in nodes.values():
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 neighbor = node_positions.get((node.x + dx, node.y + dy))
@@ -118,17 +119,12 @@ class MapGenerator:
                 neighbor_node = nodes[neighbor]
                 if node.district != neighbor_node.district:
                     road_type = "highway"
-                elif node.district == "residential":
-                    road_type = self.random.choices(["single_lane", "two_lane"], weights=[0.75, 0.25], k=1)[0]
-                elif node.district == "commercial":
-                    road_type = self.random.choices(["two_lane", "single_lane"], weights=[0.7, 0.3], k=1)[0]
                 else:
-                    road_type = self.random.choices(["two_lane", "single_lane"], weights=[0.65, 0.35], k=1)[0]
-                speed_limit = self.config.speed_limits_by_type.get(road_type, 30)
-                lanes = self.config.lanes_by_type.get(road_type, 1)
-                risk_factor = self.random.uniform(0.8, 1.4)
-                has_crossing = node.kind == "crossing" or neighbor_node.kind == "crossing"
-                road_type = self.random.choices(road_types, weights=road_weights, k=1)[0]
+                    road_type = self.random.choices(
+                        ["single_lane", "two_lane"],
+                        weights=[single_weight / total_weight, two_weight / total_weight],
+                        k=1,
+                    )[0]
                 speed_limit = self.config.speed_limits_by_type.get(road_type, 30)
                 lanes = self.config.lanes_by_type.get(road_type, 1)
                 risk_factor = self.random.uniform(0.8, 1.4)
@@ -149,6 +145,27 @@ class MapGenerator:
                 adjacency[node.node_id].append(neighbor)
 
         return MapData(nodes=nodes, edges=edges, adjacency=adjacency, pois=pois)
+
+    def _build_clusters(self, nodes: List[Node]) -> Dict[str, List[Tuple[int, int]]]:
+        cluster_count = max(1, min(3, (self.config.width + self.config.height) // 18))
+        positions = [(node.x, node.y) for node in nodes]
+        self.random.shuffle(positions)
+        return {
+            "residential": positions[:cluster_count],
+            "commercial": positions[cluster_count : cluster_count * 2],
+            "work": positions[cluster_count * 2 : cluster_count * 3],
+        }
+
+    def _assign_cluster(self, node: Node, clusters: Dict[str, List[Tuple[int, int]]]) -> str:
+        best_kind = "residential"
+        best_distance = float("inf")
+        for kind, centers in clusters.items():
+            for center_x, center_y in centers:
+                distance = (node.x - center_x) ** 2 + (node.y - center_y) ** 2
+                if distance < best_distance:
+                    best_distance = distance
+                    best_kind = kind
+        return best_kind
 
 
 def shortest_path(adjacency: Dict[int, List[int]], start: int, goal: int) -> List[int]:

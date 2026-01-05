@@ -23,7 +23,7 @@ class MapConfig:
         default_factory=lambda: {"single_lane": 25, "two_lane": 35, "highway": 55}
     )
     lanes_by_type: Dict[str, int] = field(
-        default_factory=lambda: {"single_lane": 1, "two_lane": 2, "highway": 3}
+        default_factory=lambda: {"single_lane": 1, "two_lane": 2, "highway": 4}
     )
     cycle_lane_chance: float = 0.2
 
@@ -31,6 +31,7 @@ class MapConfig:
 @dataclass(frozen=True)
 class DriverConfig:
     count: int = 20
+    cyclist_count: int = 6
     risk_profiles: Dict[str, float] = field(
         default_factory=lambda: {"low": 0.35, "medium": 0.45, "high": 0.2}
     )
