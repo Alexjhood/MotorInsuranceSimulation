@@ -20,6 +20,7 @@ def build_map_figure(
     simulation: Simulation,
     accidents: List[dict],
     selected_agent: int | None = None,
+    label_options: List[str] | None = None,
     view_bounds: tuple[float, float, float, float] | None = None,
 ) -> go.Figure:
     map_data = simulation.map_data
@@ -67,6 +68,12 @@ def build_map_figure(
             y += dy
         nodes_by_kind.setdefault(node.kind, []).append((x, y))
 
+    label_options = set(label_options or [])
+    show_agent_labels = "agents" in label_options
+    show_destination_labels = "destinations" in label_options
+    show_poi_labels = "pois" in label_options
+    show_accident_labels = "accidents" in label_options
+
     agent_x = []
     agent_y = []
     agent_angles = []
@@ -89,7 +96,7 @@ def build_map_figure(
         )
         x = node.x + offset_x
         y = node.y + offset_y
-        label = f"A{agent.agent_id}"
+        label = f"A{agent.agent_id}" if show_agent_labels else ""
         custom = {
             "type": "agent",
             "agent_id": agent.agent_id,
@@ -120,14 +127,16 @@ def build_map_figure(
         destination_node = map_data.nodes[agent.destination_node]
         destination_x.append(destination_node.x)
         destination_y.append(destination_node.y)
-        destination_labels.append(f"D{agent.agent_id}")
+        destination_labels.append(f"D{agent.agent_id}" if show_destination_labels else "")
 
     for accident in accidents:
         node = map_data.nodes[accident["location"]]
         accident_x.append(node.x)
         accident_y.append(node.y)
         accident_customdata.append({"type": "accident", **accident})
-        accident_labels.append(f"Accident (Severity: {accident['severity']})")
+        accident_labels.append(
+            f"Accident (Severity: {accident['severity']})" if show_accident_labels else ""
+        )
 
     fig = go.Figure()
     for road_type, style in edge_styles.items():
@@ -159,7 +168,7 @@ def build_map_figure(
             go.Scatter(
                 x=destination_x,
                 y=destination_y,
-                mode="markers+text",
+                mode="markers+text" if show_destination_labels else "markers",
                 marker=dict(size=8, color="#ff6f61", symbol="circle-open"),
                 text=destination_labels,
                 textposition="bottom center",
@@ -190,13 +199,14 @@ def build_map_figure(
     poi_labels = {"residence": "🏠", "work": "🏢", "commerce": "🛍️", "leisure": "🎯"}
     for kind, points in nodes_by_kind.items():
         style = node_styles.get(kind, node_styles["minor_junction"])
+        mode = "markers+text" if show_poi_labels else "markers"
         fig.add_trace(
             go.Scatter(
                 x=[point[0] for point in points],
                 y=[point[1] for point in points],
-                mode="markers",
+                mode=mode,
                 marker=dict(size=style["size"], color=style["color"], symbol=style["symbol"]),
-                text=[poi_labels.get(kind, "") for _ in points],
+                text=[poi_labels.get(kind, "") if show_poi_labels else "" for _ in points],
                 textposition="top center",
                 name=kind.replace("_", " "),
             )
@@ -206,7 +216,7 @@ def build_map_figure(
         go.Scatter(
             x=agent_x,
             y=agent_y,
-            mode="markers+text",
+            mode="markers+text" if show_agent_labels else "markers",
             marker=dict(
                 size=12,
                 color="#1f77b4",
@@ -226,7 +236,7 @@ def build_map_figure(
             go.Scatter(
                 x=cyclist_x,
                 y=cyclist_y,
-                mode="markers+text",
+                mode="markers+text" if show_agent_labels else "markers",
                 marker=dict(
                     size=10,
                     color="#2ca02c",
@@ -261,7 +271,7 @@ def build_map_figure(
             go.Scatter(
                 x=accident_x,
                 y=accident_y,
-                mode="markers",
+                mode="markers+text" if show_accident_labels else "markers",
                 marker=dict(size=14, color="#d62728", symbol="x"),
                 name="accidents",
                 customdata=accident_customdata,
@@ -329,13 +339,33 @@ def create_app() -> Dash:
                                             dcc.Input(id="commerce-count", type="number", value=6),
                                             html.Label("Leisure Places"),
                                             dcc.Input(id="leisure-count", type="number", value=6),
-                                            html.H4("Road Type Proportions"),
-                                            html.Label("Single lane"),
-                                            dcc.Input(id="road-single", type="number", value=0.55, min=0, max=1, step=0.05),
-                                            html.Label("Two lane"),
-                                            dcc.Input(id="road-two", type="number", value=0.3, min=0, max=1, step=0.05),
-                                            html.Label("Highway"),
-                                            dcc.Input(id="road-highway", type="number", value=0.15, min=0, max=1, step=0.05),
+                                            html.Label("Lane Intensity"),
+                                            dcc.Slider(
+                                                id="lane-intensity",
+                                                min=0.0,
+                                                max=1.0,
+                                                step=0.05,
+                                                value=0.5,
+                                                marks={0.0: "Low", 0.5: "Medium", 1.0: "High"},
+                                            ),
+                                            html.Label("Roundabout Proportion"),
+                                            dcc.Slider(
+                                                id="roundabout-ratio",
+                                                min=0.0,
+                                                max=0.4,
+                                                step=0.02,
+                                                value=0.08,
+                                                marks={0.0: "0%", 0.2: "20%", 0.4: "40%"},
+                                            ),
+                                            html.Label("Major Junction Proportion"),
+                                            dcc.Slider(
+                                                id="major-junction-ratio",
+                                                min=0.0,
+                                                max=0.4,
+                                                step=0.02,
+                                                value=0.14,
+                                                marks={0.0: "0%", 0.2: "20%", 0.4: "40%"},
+                                            ),
                                             html.Div(
                                                 style={"display": "flex", "justifyContent": "flex-end"},
                                                 children=[
@@ -414,6 +444,18 @@ def create_app() -> Dash:
                                                     html.Button("Reset", id="reset-btn", style={"marginLeft": "8px"}),
                                                 ]
                                             ),
+                                            html.Label("Labels"),
+                                            dcc.Checklist(
+                                                id="label-options",
+                                                options=[
+                                                    {"label": "Agent IDs", "value": "agents"},
+                                                    {"label": "Destination IDs", "value": "destinations"},
+                                                    {"label": "POI Icons", "value": "pois"},
+                                                    {"label": "Accident Labels", "value": "accidents"},
+                                                ],
+                                                value=["agents", "destinations", "pois"],
+                                                labelStyle={"display": "block"},
+                                            ),
                                             html.H4("Selection Details"),
                                             html.Div(
                                                 id="running-selection-detail",
@@ -483,9 +525,9 @@ def create_app() -> Dash:
         State("work-count", "value"),
         State("commerce-count", "value"),
         State("leisure-count", "value"),
-        State("road-single", "value"),
-        State("road-two", "value"),
-        State("road-highway", "value"),
+        State("lane-intensity", "value"),
+        State("roundabout-ratio", "value"),
+        State("major-junction-ratio", "value"),
         State("sim-state", "data"),
         prevent_initial_call=True,
     )
@@ -502,9 +544,9 @@ def create_app() -> Dash:
         work_count,
         commerce_count,
         leisure_count,
-        road_single,
-        road_two,
-        road_highway,
+        lane_intensity,
+        roundabout_ratio,
+        major_junction_ratio,
         state,
     ):
         trigger = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
@@ -518,9 +560,9 @@ def create_app() -> Dash:
                 work_count,
                 commerce_count,
                 leisure_count,
-                road_single,
-                road_two,
-                road_highway,
+                lane_intensity,
+                roundabout_ratio,
+                major_junction_ratio,
             )
             sim = Simulation(config)
             new_state = _serialize_sim(sim)
@@ -539,9 +581,9 @@ def create_app() -> Dash:
                 work_count,
                 commerce_count,
                 leisure_count,
-                road_single,
-                road_two,
-                road_highway,
+                lane_intensity,
+                roundabout_ratio,
+                major_junction_ratio,
             )
             sim = Simulation(config)
             new_state = _serialize_sim(sim)
@@ -611,14 +653,15 @@ def create_app() -> Dash:
         Input("sim-state", "data"),
         Input("accident-store", "data"),
         Input("selected-agent", "data"),
+        Input("label-options", "value"),
         Input("view-store", "data"),
     )
-    def render_simulation(state, accidents, selected_agent, view_store):
+    def render_simulation(state, accidents, selected_agent, label_options, view_store):
         if state is None:
             config = SimulationConfig()
             simulation = Simulation(config)
             summary = summarize_run(simulation)
-            figure = build_map_figure(simulation, accidents or [], selected_agent)
+            figure = build_map_figure(simulation, accidents or [], selected_agent, label_options)
             return figure, json.dumps(summary, indent=2)
         simulation = _deserialize_sim(state)
         summary = summarize_run(simulation)
@@ -630,7 +673,13 @@ def create_app() -> Dash:
                 view_store["y"][0],
                 view_store["y"][1],
             )
-        figure = build_map_figure(simulation, accidents or [], selected_agent, view_bounds=view_bounds)
+        figure = build_map_figure(
+            simulation,
+            accidents or [],
+            selected_agent,
+            label_options,
+            view_bounds=view_bounds,
+        )
         return figure, json.dumps(summary, indent=2)
 
     @app.callback(
@@ -814,9 +863,9 @@ def _config_from_inputs(
     work_count: int,
     commerce_count: int,
     leisure_count: int,
-    road_single: float,
-    road_two: float,
-    road_highway: float,
+    lane_intensity: float,
+    roundabout_ratio: float,
+    major_junction_ratio: float,
 ) -> SimulationConfig:
     size_map = {
         "small": (12, 8),
@@ -824,12 +873,6 @@ def _config_from_inputs(
         "large": (28, 20),
     }
     width, height = size_map.get(map_size, (20, 14))
-    total_weight = sum(filter(None, [road_single, road_two, road_highway])) or 1.0
-    road_type_weights = {
-        "single_lane": (road_single or 0.0) / total_weight,
-        "two_lane": (road_two or 0.0) / total_weight,
-        "highway": (road_highway or 0.0) / total_weight,
-    }
     map_config = MapConfig(
         width=width,
         height=height,
@@ -837,7 +880,9 @@ def _config_from_inputs(
         work_count=work_count or 6,
         commerce_count=commerce_count or 6,
         leisure_count=leisure_count or 6,
-        road_type_weights=road_type_weights,
+        lane_intensity=lane_intensity if lane_intensity is not None else 0.5,
+        roundabout_ratio=roundabout_ratio if roundabout_ratio is not None else 0.08,
+        major_junction_ratio=major_junction_ratio if major_junction_ratio is not None else 0.14,
     )
     driver_config = DriverConfig(count=agent_count, cyclist_count=cyclist_count or 0)
     return SimulationConfig(seed=seed or 42, map_config=map_config, driver_config=driver_config)

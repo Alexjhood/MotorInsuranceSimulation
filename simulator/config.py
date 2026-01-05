@@ -8,17 +8,16 @@ from typing import Dict, List
 class MapConfig:
     width: int = 20
     height: int = 14
-    road_density: float = 0.65
-    roundabout_count: int = 3
+    road_density: float = 0.5
+    roundabout_ratio: float = 0.08
+    major_junction_ratio: float = 0.14
     residential_count: int = 12
     work_count: int = 6
     commerce_count: int = 6
     leisure_count: int = 6
     pedestrian_crossing_count: int = 6
     cyclist_hub_count: int = 5
-    road_type_weights: Dict[str, float] = field(
-        default_factory=lambda: {"single_lane": 0.55, "two_lane": 0.3, "highway": 0.15}
-    )
+    lane_intensity: float = 0.5
     speed_limits_by_type: Dict[str, int] = field(
         default_factory=lambda: {"single_lane": 25, "two_lane": 35, "highway": 55}
     )
