@@ -10,10 +10,22 @@ class MapConfig:
     height: int = 14
     road_density: float = 0.85
     roundabout_count: int = 3
-    speed_limits: List[int] = field(default_factory=lambda: [20, 30, 40, 50])
     residential_count: int = 12
     work_count: int = 6
-    visit_count: int = 8
+    commerce_count: int = 6
+    leisure_count: int = 6
+    pedestrian_crossing_count: int = 6
+    cyclist_hub_count: int = 5
+    road_type_weights: Dict[str, float] = field(
+        default_factory=lambda: {"single_lane": 0.55, "two_lane": 0.3, "highway": 0.15}
+    )
+    speed_limits_by_type: Dict[str, int] = field(
+        default_factory=lambda: {"single_lane": 25, "two_lane": 35, "highway": 55}
+    )
+    lanes_by_type: Dict[str, int] = field(
+        default_factory=lambda: {"single_lane": 1, "two_lane": 2, "highway": 3}
+    )
+    cycle_lane_chance: float = 0.2
 
 
 @dataclass(frozen=True)
