@@ -19,8 +19,12 @@ This document provides deeper details about how each module works and how to ext
   - `width`, `height`: map grid dimensions.
   - `road_density`: probability of nodes existing in each grid cell.
   - `roundabout_count`: number of roundabouts.
-  - `speed_limits`: list of allowable speed limits.
-  - `residential_count`, `work_count`, `visit_count`: POI counts.
+  - `residential_count`, `work_count`, `commerce_count`, `leisure_count`: POI counts.
+  - `pedestrian_crossing_count`, `cyclist_hub_count`: mobility POI counts.
+  - `road_type_weights`: weighted distribution of road types.
+  - `speed_limits_by_type`: per-road-type speed limits.
+  - `lanes_by_type`: per-road-type lane counts.
+  - `cycle_lane_chance`: probability a segment has a cycle lane.
 
 - `DriverConfig`
   - `count`: number of drivers.
@@ -31,8 +35,9 @@ This document provides deeper details about how each module works and how to ext
 ## Map Generation (`simulator/mapgen/mapgen.py`)
 
 - `MapGenerator.generate()` builds a grid-based graph with metadata.
-- `Node.kind` values: `junction`, `roundabout`, `residence`, `work`, `visit`.
-- `Edge` contains speed limits and a per-edge risk factor.
+- `Node.kind` values: `junction`, `roundabout`, `residence`, `work`, `commerce`, `leisure`, `crossing`, `cyclist`.
+- `Node.district` partitions the map into residential, commercial, and work bands.
+- `Edge` includes speed limits, risk factors, road type, lane count, and cycle/crossing flags.
 - `shortest_path()` computes a basic BFS route for agent navigation.
 
 ---
@@ -48,6 +53,7 @@ This document provides deeper details about how each module works and how to ext
 
 - `accident_probability()` evaluates crash probability per step based on:
   - edge risk, time of day, driver risk, speed.
+  - road type, pedestrian crossings, and cycle lanes.
 - `build_accident()` emits a single event with:
   - participants, severity, at-fault, and claim estimates.
 
@@ -58,6 +64,8 @@ This document provides deeper details about how each module works and how to ext
 - `Simulation`
   - Owns the map, agents, and event log.
   - `step()` advances all agents, evaluates accidents, logs events.
+  - Agents cycle between home, work, and commerce/leisure destinations.
+  - Each agent tracks a destination and previous node for heading visualization.
   - `run()` advances for a configured number of steps.
 
 - `SimulationRunner`
@@ -80,10 +88,12 @@ This document provides deeper details about how each module works and how to ext
 
 - Dash control panel for:
   - seed, agent count, map size
-  - start, pause, reset
+  - start, pause, step, back, reset
+  - playback speed
 - Visualization panel:
-  - map nodes and edges
-  - agent positions
+  - district-aware roads with lane offsets and cycle lanes
+  - POI markers with icons offset from roads
+  - numbered vehicles with selectable routes
   - accident markers
 
 ---
@@ -91,7 +101,7 @@ This document provides deeper details about how each module works and how to ext
 ## Extending the Simulator
 
 Suggested expansions:
-- Add cyclists/pedestrians and interactions.
+- Add cyclists/pedestrians interactions beyond static POIs.
 - Introduce congestion impacts on routing.
 - Improve collision modeling (lane-level, junction priority).
 - Export full event logs to CSV/Parquet.
