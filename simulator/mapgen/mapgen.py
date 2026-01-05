@@ -13,6 +13,7 @@ class Node:
     x: int
     y: int
     kind: str = "junction"  # junction, roundabout, residence, work, commerce, leisure, crossing, cyclist
+    district: str = "mixed"  # residential, commercial, work, mixed
 
 
 @dataclass
@@ -46,11 +47,18 @@ class MapGenerator:
         edges: List[Edge] = []
 
         node_id = 0
+        district_width = max(1, self.config.width // 3)
         for y in range(self.config.height):
             for x in range(self.config.width):
                 if self.random.random() > self.config.road_density:
                     continue
-                nodes[node_id] = Node(node_id=node_id, x=x, y=y)
+                if x < district_width:
+                    district = "residential"
+                elif x < district_width * 2:
+                    district = "commercial"
+                else:
+                    district = "work"
+                nodes[node_id] = Node(node_id=node_id, x=x, y=y, district=district)
                 adjacency[node_id] = []
                 node_id += 1
 
@@ -79,11 +87,22 @@ class MapGenerator:
             "cyclist": [],
         }
         idx = 0
+        def _filter_by_district(options: List[int], target: str) -> List[int]:
+            return [nid for nid in options if nodes[nid].district == target]
+
         for kind, count in poi_sets.items():
             for _ in range(count):
                 if idx >= len(available_nodes):
                     break
-                node_id = available_nodes[idx]
+                if kind == "residence":
+                    candidates = _filter_by_district(available_nodes[idx:], "residential")
+                elif kind in {"commerce", "leisure", "crossing", "cyclist"}:
+                    candidates = _filter_by_district(available_nodes[idx:], "commercial")
+                elif kind == "work":
+                    candidates = _filter_by_district(available_nodes[idx:], "work")
+                else:
+                    candidates = available_nodes[idx:]
+                node_id = candidates[0] if candidates else available_nodes[idx]
                 nodes[node_id].kind = kind
                 pois[kind].append(node_id)
                 idx += 1
@@ -96,6 +115,19 @@ class MapGenerator:
                 neighbor = node_positions.get((node.x + dx, node.y + dy))
                 if neighbor is None:
                     continue
+                neighbor_node = nodes[neighbor]
+                if node.district != neighbor_node.district:
+                    road_type = "highway"
+                elif node.district == "residential":
+                    road_type = self.random.choices(["single_lane", "two_lane"], weights=[0.75, 0.25], k=1)[0]
+                elif node.district == "commercial":
+                    road_type = self.random.choices(["two_lane", "single_lane"], weights=[0.7, 0.3], k=1)[0]
+                else:
+                    road_type = self.random.choices(["two_lane", "single_lane"], weights=[0.65, 0.35], k=1)[0]
+                speed_limit = self.config.speed_limits_by_type.get(road_type, 30)
+                lanes = self.config.lanes_by_type.get(road_type, 1)
+                risk_factor = self.random.uniform(0.8, 1.4)
+                has_crossing = node.kind == "crossing" or neighbor_node.kind == "crossing"
                 road_type = self.random.choices(road_types, weights=road_weights, k=1)[0]
                 speed_limit = self.config.speed_limits_by_type.get(road_type, 30)
                 lanes = self.config.lanes_by_type.get(road_type, 1)
