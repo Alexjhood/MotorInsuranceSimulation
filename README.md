@@ -4,10 +4,10 @@ This repository contains a **Python-based traffic simulator** with a focus on **
 
 ## Features
 
-- **Synthetic map generation** (configurable size, road density, speed limits, roundabouts, POIs).
+- **Synthetic map generation** with district zoning, road types, cycle lanes, pedestrian crossings, roundabouts, and POIs.
 - **Agent-based traffic** with driver risk profiles and vehicle attributes.
 - **Accident modeling** including severity, liability assignment, and claims estimates.
-- **Dash UI** with a control panel and live visualization.
+- **Dash UI** with playback controls, agent selection, zoom/pan, and live visualization.
 - **Deterministic replay** via seeded simulations.
 - **Headless runs** and **parallel batch runs** for performance testing.
 
@@ -47,8 +47,9 @@ python -m simulator.cli --headless --parallel-runs 4 --steps 200
 
 ### Movement
 - Each agent moves **one node per step** on a generated road graph.
-- Routes are shortest paths between home/work/visit nodes.
-- When an agent completes a route, a new destination is selected.
+- Routes are shortest paths between home, work, and commerce/leisure nodes.
+- Agents cycle destinations between work, home, and optional commerce/leisure stops.
+- Homes are unique per agent when possible.
 
 ### Driver & Vehicle Profiles
 - Driver risk profile influences speed bias and accident probability.
@@ -60,6 +61,7 @@ python -m simulator.cli --headless --parallel-runs 4 --steps 200
 - Severity is based on speed and a stochastic factor.
 - Claim amounts are derived from vehicle value and severity.
 - Liability is assigned probabilistically based on driver risk.
+- Road type, crossings, and cycle lanes influence accident likelihood.
 
 ---
 
@@ -95,7 +97,7 @@ MotorInsuranceSimulation/
 
 This is a prototype intended for exploration and visualization. The following areas are designed to be expanded:
 - Route choice strategies and congestion
-- Pedestrians and cyclists
+- Pedestrians and cyclists interactions beyond risk modifiers
 - More sophisticated liability rules
 - Additional insurance products (limits/deductibles)
 - Advanced visual analytics (heatmaps, timelines, etc.)
