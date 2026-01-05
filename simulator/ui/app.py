@@ -16,16 +16,27 @@ from simulator.reporting.summary import summarize_run
 
 def build_map_figure(simulation: Simulation, accidents: List[dict]) -> go.Figure:
     map_data = simulation.map_data
-    edge_x = []
-    edge_y = []
+    edge_styles = {
+        "single_lane": {"color": "#c0c4cc", "width": 1.5},
+        "two_lane": {"color": "#9aa0a6", "width": 2.5},
+        "highway": {"color": "#5f6368", "width": 3.5},
+    }
+    edge_coords = {key: {"x": [], "y": []} for key in edge_styles}
+    cycle_x: list[float] = []
+    cycle_y: list[float] = []
     for edge in map_data.edges:
         start = map_data.nodes[edge.start]
         end = map_data.nodes[edge.end]
-        edge_x += [start.x, end.x, None]
-        edge_y += [start.y, end.y, None]
+        coords = edge_coords.get(edge.road_type, edge_coords["single_lane"])
+        coords["x"] += [start.x, end.x, None]
+        coords["y"] += [start.y, end.y, None]
+        if edge.has_cycle_lane:
+            cycle_x += [start.x, end.x, None]
+            cycle_y += [start.y, end.y, None]
 
-    node_x = [node.x for node in map_data.nodes.values()]
-    node_y = [node.y for node in map_data.nodes.values()]
+    nodes_by_kind: dict[str, list[tuple[int, int]]] = {}
+    for node in map_data.nodes.values():
+        nodes_by_kind.setdefault(node.kind, []).append((node.x, node.y))
 
     agent_x = []
     agent_y = []
@@ -42,9 +53,61 @@ def build_map_figure(simulation: Simulation, accidents: List[dict]) -> go.Figure
         accident_y.append(node.y)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=edge_x, y=edge_y, mode="lines", line=dict(color="#9aa0a6"), name="roads"))
-    fig.add_trace(go.Scatter(x=node_x, y=node_y, mode="markers", marker=dict(size=6, color="#c2c5cc"), name="nodes"))
-    fig.add_trace(go.Scatter(x=agent_x, y=agent_y, mode="markers", marker=dict(size=10, color="#1f77b4"), name="agents"))
+    for road_type, style in edge_styles.items():
+        coords = edge_coords[road_type]
+        fig.add_trace(
+            go.Scatter(
+                x=coords["x"],
+                y=coords["y"],
+                mode="lines",
+                line=dict(color=style["color"], width=style["width"]),
+                name=road_type.replace("_", " "),
+                hoverinfo="skip",
+            )
+        )
+    if cycle_x:
+        fig.add_trace(
+            go.Scatter(
+                x=cycle_x,
+                y=cycle_y,
+                mode="lines",
+                line=dict(color="#2ca02c", width=1.2, dash="dot"),
+                name="cycle lanes",
+                hoverinfo="skip",
+            )
+        )
+
+    node_styles = {
+        "junction": {"color": "#c2c5cc", "size": 5, "symbol": "circle"},
+        "roundabout": {"color": "#8d99ae", "size": 10, "symbol": "circle-open"},
+        "residence": {"color": "#1f77b4", "size": 10, "symbol": "square"},
+        "work": {"color": "#9467bd", "size": 10, "symbol": "diamond"},
+        "commerce": {"color": "#ff7f0e", "size": 10, "symbol": "star"},
+        "leisure": {"color": "#e377c2", "size": 10, "symbol": "hexagon"},
+        "crossing": {"color": "#f1c40f", "size": 9, "symbol": "square-open"},
+        "cyclist": {"color": "#2ca02c", "size": 9, "symbol": "triangle-up"},
+    }
+    for kind, points in nodes_by_kind.items():
+        style = node_styles.get(kind, node_styles["junction"])
+        fig.add_trace(
+            go.Scatter(
+                x=[point[0] for point in points],
+                y=[point[1] for point in points],
+                mode="markers",
+                marker=dict(size=style["size"], color=style["color"], symbol=style["symbol"]),
+                name=kind.replace("_", " "),
+            )
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=agent_x,
+            y=agent_y,
+            mode="markers",
+            marker=dict(size=11, color="#1f77b4", line=dict(width=1, color="#0b3d91")),
+            name="agents",
+        )
+    )
     if accident_x:
         fig.add_trace(
             go.Scatter(
@@ -60,6 +123,7 @@ def build_map_figure(simulation: Simulation, accidents: List[dict]) -> go.Figure
         margin=dict(l=20, r=20, t=30, b=20),
         xaxis=dict(showgrid=False, zeroline=False),
         yaxis=dict(showgrid=False, zeroline=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     return fig
 
@@ -92,6 +156,7 @@ def create_app() -> Dash:
                     html.Div(style={"height": "10px"}),
                     html.Button("Start", id="start-btn"),
                     html.Button("Pause", id="pause-btn", style={"marginLeft": "8px"}),
+                    html.Button("Step", id="step-btn", style={"marginLeft": "8px"}),
                     html.Button("Reset", id="reset-btn", style={"marginLeft": "8px"}),
                     html.H4("Summary"),
                     html.Pre(id="summary-output", style={"whiteSpace": "pre-wrap"}),
@@ -138,12 +203,14 @@ def create_app() -> Dash:
         Output("sim-graph", "figure"),
         Output("accident-store", "data", allow_duplicate=True),
         Output("summary-output", "children"),
+        Output("sim-state", "data", allow_duplicate=True),
         Input("tick", "n_intervals"),
+        Input("step-btn", "n_clicks"),
         State("sim-state", "data"),
         State("accident-store", "data"),
         prevent_initial_call=True,
     )
-    def advance_simulation(_, state, accidents):
+    def advance_simulation(_, __, state, accidents):
         if state is None:
             config = SimulationConfig()
             simulation = Simulation(config)
@@ -161,7 +228,7 @@ def create_app() -> Dash:
         ]
         summary = summarize_run(simulation)
         figure = build_map_figure(simulation, accidents[-20:])
-        return figure, accidents, json.dumps(summary, indent=2)
+        return figure, accidents, json.dumps(summary, indent=2), _serialize_sim(simulation)
 
     return app
 
