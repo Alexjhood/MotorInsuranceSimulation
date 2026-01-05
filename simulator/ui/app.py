@@ -169,7 +169,8 @@ def build_map_figure(
         )
 
     node_styles = {
-        "junction": {"color": "#c2c5cc", "size": 5, "symbol": "circle"},
+        "major_junction": {"color": "#5f6368", "size": 7, "symbol": "circle"},
+        "minor_junction": {"color": "#c2c5cc", "size": 5, "symbol": "circle"},
         "roundabout": {"color": "#8d99ae", "size": 10, "symbol": "circle-open"},
         "residence": {"color": "#1f77b4", "size": 12, "symbol": "square"},
         "work": {"color": "#9467bd", "size": 12, "symbol": "diamond"},
@@ -188,7 +189,7 @@ def build_map_figure(
     }
     poi_labels = {"residence": "🏠", "work": "🏢", "commerce": "🛍️", "leisure": "🎯"}
     for kind, points in nodes_by_kind.items():
-        style = node_styles.get(kind, node_styles["junction"])
+        style = node_styles.get(kind, node_styles["minor_junction"])
         fig.add_trace(
             go.Scatter(
                 x=[point[0] for point in points],
@@ -205,7 +206,7 @@ def build_map_figure(
         go.Scatter(
             x=agent_x,
             y=agent_y,
-            mode="markers",
+            mode="markers+text",
             marker=dict(
                 size=12,
                 color="#1f77b4",
@@ -225,7 +226,7 @@ def build_map_figure(
             go.Scatter(
                 x=cyclist_x,
                 y=cyclist_y,
-                mode="markers",
+                mode="markers+text",
                 marker=dict(
                     size=10,
                     color="#2ca02c",
@@ -335,6 +336,16 @@ def create_app() -> Dash:
                                             dcc.Input(id="road-two", type="number", value=0.3, min=0, max=1, step=0.05),
                                             html.Label("Highway"),
                                             dcc.Input(id="road-highway", type="number", value=0.15, min=0, max=1, step=0.05),
+                                            html.Div(
+                                                style={"display": "flex", "justifyContent": "flex-end"},
+                                                children=[
+                                                    html.Button(
+                                                        "Reset Simulation",
+                                                        id="setup-reset-btn",
+                                                        style={"marginTop": "6px"},
+                                                    )
+                                                ],
+                                            ),
                                         ],
                                     )
                                 ],
@@ -348,15 +359,40 @@ def create_app() -> Dash:
                                         children=[
                                             html.Label("View Controls"),
                                             html.Div(
-                                                style={"display": "flex", "gap": "6px", "flexWrap": "wrap"},
+                                                style={
+                                                    "display": "flex",
+                                                    "gap": "16px",
+                                                    "alignItems": "center",
+                                                    "flexWrap": "wrap",
+                                                },
                                                 children=[
-                                                    html.Button("Zoom In", id="zoom-in-btn"),
-                                                    html.Button("Zoom Out", id="zoom-out-btn"),
-                                                    html.Button("Pan Left", id="pan-left-btn"),
-                                                    html.Button("Pan Right", id="pan-right-btn"),
-                                                    html.Button("Pan Up", id="pan-up-btn"),
-                                                    html.Button("Pan Down", id="pan-down-btn"),
-                                                    html.Button("Reset View", id="reset-view-btn"),
+                                                    html.Div(
+                                                        style={"display": "flex", "flexDirection": "column", "gap": "6px"},
+                                                        children=[
+                                                            html.Button("＋", id="zoom-in-btn", title="Zoom in"),
+                                                            html.Button("－", id="zoom-out-btn", title="Zoom out"),
+                                                        ],
+                                                    ),
+                                                    html.Div(
+                                                        style={
+                                                            "display": "flex",
+                                                            "flexDirection": "column",
+                                                            "alignItems": "center",
+                                                            "gap": "6px",
+                                                        },
+                                                        children=[
+                                                            html.Button("⬆️", id="pan-up-btn", title="Pan up"),
+                                                            html.Div(
+                                                                style={"display": "flex", "gap": "6px"},
+                                                                children=[
+                                                                    html.Button("⬅️", id="pan-left-btn", title="Pan left"),
+                                                                    html.Button("↺", id="reset-view-btn", title="Reset view"),
+                                                                    html.Button("➡️", id="pan-right-btn", title="Pan right"),
+                                                                ],
+                                                            ),
+                                                            html.Button("⬇️", id="pan-down-btn", title="Pan down"),
+                                                        ],
+                                                    ),
                                                 ],
                                             ),
                                             html.Label("Playback Speed (steps/sec)"),
@@ -438,6 +474,7 @@ def create_app() -> Dash:
         Input("start-btn", "n_clicks"),
         Input("pause-btn", "n_clicks"),
         Input("reset-btn", "n_clicks"),
+        Input("setup-reset-btn", "n_clicks"),
         State("seed-input", "value"),
         State("agent-count", "value"),
         State("cyclist-count", "value"),
@@ -456,6 +493,7 @@ def create_app() -> Dash:
         start,
         pause,
         reset,
+        setup_reset,
         seed,
         agent_count,
         cyclist_count,
@@ -491,7 +529,7 @@ def create_app() -> Dash:
             return new_state, [], history, 0, disabled
         if trigger == "pause-btn":
             return state, dash.no_update, dash.no_update, dash.no_update, True
-        if trigger == "reset-btn":
+        if trigger in {"reset-btn", "setup-reset-btn"}:
             config = _config_from_inputs(
                 seed,
                 agent_count,

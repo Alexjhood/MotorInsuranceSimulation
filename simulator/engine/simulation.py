@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import random
+import heapq
 from typing import Dict, List, Tuple
 
 from simulator.accidents.model import AccidentEvent, accident_probability, build_accident
 from simulator.agents.driver import DriverProfile, build_driver
 from simulator.agents.vehicle import BICYCLE_PROFILE, VEHICLE_CLASSES, VehicleProfile
 from simulator.config import SimulationConfig
-from simulator.mapgen.mapgen import MapData, MapGenerator, shortest_path
+from simulator.mapgen.mapgen import MapData, MapGenerator
 
 
 @dataclass
@@ -72,7 +73,7 @@ class Simulation:
             vehicle = VehicleProfile(*vehicle_class)
             home_node = available_homes.pop() if available_homes else self._pick_node("residence")
             work_node = self._pick_node("work")
-            route = shortest_path(self.nav_adjacency, home_node, work_node)
+            route = self._find_route(home_node, work_node)
             self.agents[agent_id] = AgentState(
                 agent_id=agent_id,
                 current_node=home_node,
@@ -99,7 +100,7 @@ class Simulation:
             else:
                 home_node = self._pick_node("cyclist")
             destination_node = self._pick_node("commerce")
-            route = shortest_path(self.nav_adjacency, home_node, destination_node)
+            route = self._find_route(home_node, destination_node)
             self.agents[agent_id] = AgentState(
                 agent_id=agent_id,
                 current_node=home_node,
@@ -120,7 +121,7 @@ class Simulation:
 
     def _node_wait_steps(self, node_id: int) -> int:
         node_kind = self.map_data.nodes[node_id].kind
-        return 1 if node_kind in {"roundabout", "junction"} else 0
+        return 1 if node_kind in {"roundabout", "major_junction"} else 0
 
     def _select_destination(self, agent: AgentState) -> int:
         commerce = self.map_data.pois.get("commerce", [])
@@ -148,7 +149,7 @@ class Simulation:
             return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "wait"}
         if agent.route_index + 1 >= len(agent.route):
             agent.destination_node = self._select_destination(agent)
-            agent.route = shortest_path(self.nav_adjacency, agent.current_node, agent.destination_node)
+            agent.route = self._find_route(agent.current_node, agent.destination_node)
             agent.route_index = 0
         next_index = min(agent.route_index + 1, len(agent.route) - 1)
         next_node = agent.route[next_index]
@@ -239,13 +240,48 @@ class Simulation:
                 return edge
         return self.map_data.edges[0]
 
-    def _build_navigation_graph(self, map_data: MapData) -> Dict[int, List[int]]:
-        adjacency: Dict[int, List[int]] = {node_id: [] for node_id in map_data.nodes}
+    def _build_navigation_graph(self, map_data: MapData) -> Dict[int, List[Tuple[int, float]]]:
+        adjacency: Dict[int, List[Tuple[int, float]]] = {node_id: [] for node_id in map_data.nodes}
         for edge in map_data.edges:
             if edge.has_cycle_lane:
                 continue
-            adjacency[edge.start].append(edge.end)
+            weight = self._edge_weight(edge.road_type)
+            adjacency[edge.start].append((edge.end, weight))
         return adjacency
+
+    def _edge_weight(self, road_type: str) -> float:
+        weights = {"highway": 0.7, "two_lane": 0.9, "single_lane": 1.0}
+        return weights.get(road_type, 1.0)
+
+    def _find_route(self, start: int, goal: int) -> List[int]:
+        if start == goal:
+            return [start]
+        distances: Dict[int, float] = {start: 0.0}
+        came_from: Dict[int, int | None] = {start: None}
+        queue: List[Tuple[float, int]] = [(0.0, start)]
+        visited: set[int] = set()
+
+        while queue:
+            current_dist, current = heapq.heappop(queue)
+            if current in visited:
+                continue
+            visited.add(current)
+            if current == goal:
+                break
+            for neighbor, weight in self.nav_adjacency.get(current, []):
+                new_dist = current_dist + weight
+                if new_dist < distances.get(neighbor, float("inf")):
+                    distances[neighbor] = new_dist
+                    came_from[neighbor] = current
+                    heapq.heappush(queue, (new_dist, neighbor))
+
+        if goal not in came_from:
+            return [start]
+        path = [goal]
+        while path[-1] != start:
+            path.append(came_from[path[-1]])
+        path.reverse()
+        return path
 
     def _assign_lanes(self) -> None:
         edge_groups: Dict[Tuple[int, int], List[int]] = {}
