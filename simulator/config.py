@@ -6,29 +6,43 @@ from typing import Dict, List
 
 @dataclass(frozen=True)
 class MapConfig:
-    width: int = 20
-    height: int = 14
-    road_density: float = 0.5
-    roundabout_ratio: float = 0.08
+    # Cluster generation (Poisson processes)
+    cluster_lambda: float = 3.0  # Expected number of clusters (minimum 1)
+    homes_per_cluster_lambda: float = 4.0  # Expected homes per cluster
+    other_locations_per_cluster_lambda: float = 4.0  # Expected other locations per cluster
+    
+    # Map dimensions (used for spacing clusters)
+    map_scale: float = 100.0  # Scale factor for cluster spacing
+    cluster_radius: float = 15.0  # Radius within which cluster locations are placed
+    min_cluster_spacing: float = 40.0  # Minimum distance between cluster centers
+    
+    # Road network parameters
+    intra_cluster_roundabout_chance: float = 0.15  # Chance of roundabout at cluster junctions
+    intra_cluster_dual_road_chance: float = 0.3  # Chance of dual carriageway within cluster
+    highway_merge_roundabout_chance: float = 0.4  # Chance of roundabout where highways merge
     major_junction_ratio: float = 0.14
-    residential_count: int = 12
-    residential_cluster_count: int = 2
-    work_count: int = 6
-    work_cluster_count: int = 2
-    commerce_count: int = 6
-    commerce_cluster_count: int = 2
-    leisure_count: int = 6
-    leisure_cluster_count: int = 2
-    pedestrian_crossing_count: int = 6
-    cyclist_hub_count: int = 5
-    lane_intensity: float = 0.5
+    
+    # Location type distribution within clusters
+    cluster_type_weights: Dict[str, float] = field(
+        default_factory=lambda: {"residential": 0.4, "work": 0.2, "commerce": 0.25, "leisure": 0.15}
+    )
+    
+    # POI counts (now derived from cluster generation, but these set minimums)
+    min_residences: int = 5
+    min_workplaces: int = 3
+    min_commerce: int = 3
+    min_leisure: int = 2
+    pedestrian_crossing_ratio: float = 0.1  # Ratio of nodes that become crossings
+    cyclist_hub_ratio: float = 0.08  # Ratio of nodes that become cyclist hubs
+    
+    # Road specifications
     speed_limits_by_type: Dict[str, int] = field(
-        default_factory=lambda: {"single_lane": 25, "two_lane": 35, "highway": 55}
+        default_factory=lambda: {"single_lane": 25, "dual_carriageway": 40, "highway": 70}
     )
     lanes_by_type: Dict[str, int] = field(
-        default_factory=lambda: {"single_lane": 1, "two_lane": 2, "highway": 4}
+        default_factory=lambda: {"single_lane": 1, "dual_carriageway": 2, "highway": 4}
     )
-    cycle_lane_chance: float = 0.2
+    cycle_lane_chance: float = 0.0
 
 
 @dataclass(frozen=True)

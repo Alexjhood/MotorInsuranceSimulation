@@ -28,12 +28,10 @@ def build_map_figure(
     edge_lookup = {(edge.start, edge.end): edge for edge in map_data.edges}
     edge_styles = {
         "single_lane": {"color": "#c0c4cc", "width": 1.4},
-        "two_lane": {"color": "#9aa0a6", "width": 2.2},
+        "dual_carriageway": {"color": "#9aa0a6", "width": 2.2},
         "highway": {"color": "#5f6368", "width": 2.6},
     }
     edge_coords = {key: {"x": [], "y": []} for key in edge_styles}
-    cycle_x: list[float] = []
-    cycle_y: list[float] = []
     for edge in map_data.edges:
         start = map_data.nodes[edge.start]
         end = map_data.nodes[edge.end]
@@ -50,9 +48,6 @@ def build_map_figure(
         if edge.lanes <= 1:
             coords["x"] += [start.x, end.x, None]
             coords["y"] += [start.y, end.y, None]
-        if edge.has_cycle_lane:
-            cycle_x += [start.x, end.x, None]
-            cycle_y += [start.y, end.y, None]
 
     nodes_by_kind: dict[str, list[tuple[float, float]]] = {}
     poi_offset = {
@@ -152,17 +147,6 @@ def build_map_figure(
                 hoverinfo="skip",
             )
         )
-    if cycle_x:
-        fig.add_trace(
-            go.Scatter(
-                x=cycle_x,
-                y=cycle_y,
-                mode="lines",
-                line=dict(color="#2ca02c", width=1.2, dash="dot"),
-                name="cycle lanes",
-                hoverinfo="skip",
-            )
-        )
 
     if destination_x:
         fig.add_trace(
@@ -181,31 +165,31 @@ def build_map_figure(
     node_styles = {
         "major_junction": {
             "color": "#495057",
-            "size": 14,
+            "size": 10,
             "symbol": "circle",
             "line": {"width": 2, "color": "#343a40"},
         },
-        "minor_junction": {"color": "#c2c5cc", "size": 6, "symbol": "circle"},
+        "minor_junction": {"color": "#c2c5cc", "size": 4, "symbol": "circle"},
         "roundabout": {
             "color": "#8d99ae",
-            "size": 18,
+            "size": 12,
             "symbol": "circle-open-dot",
             "line": {"width": 2, "color": "#6c757d"},
         },
-        "residence": {"color": "#1f77b4", "size": 12, "symbol": "square"},
-        "work": {"color": "#9467bd", "size": 12, "symbol": "diamond"},
-        "commerce": {"color": "#ff7f0e", "size": 12, "symbol": "star"},
-        "leisure": {"color": "#e377c2", "size": 12, "symbol": "hexagon"},
-        "crossing": {"color": "#f1c40f", "size": 9, "symbol": "square-open"},
-        "cyclist": {"color": "#2ca02c", "size": 9, "symbol": "triangle-up"},
+        "residence": {"color": "#1f77b4", "size": 8, "symbol": "square"},
+        "work": {"color": "#9467bd", "size": 8, "symbol": "diamond"},
+        "commerce": {"color": "#ff7f0e", "size": 8, "symbol": "star"},
+        "leisure": {"color": "#e377c2", "size": 8, "symbol": "hexagon"},
+        "crossing": {"color": "#f1c40f", "size": 6, "symbol": "square-open"},
+        "cyclist": {"color": "#2ca02c", "size": 6, "symbol": "triangle-up"},
     }
     poi_styles = {
-        "residence": {"color": "#1f77b4", "size": 10, "symbol": "square"},
-        "work": {"color": "#9467bd", "size": 10, "symbol": "diamond"},
-        "commerce": {"color": "#ff7f0e", "size": 10, "symbol": "star"},
-        "leisure": {"color": "#e377c2", "size": 10, "symbol": "hexagon"},
-        "crossing": {"color": "#f1c40f", "size": 9, "symbol": "square-open"},
-        "cyclist": {"color": "#2ca02c", "size": 9, "symbol": "triangle-up"},
+        "residence": {"color": "#1f77b4", "size": 6, "symbol": "square"},
+        "work": {"color": "#9467bd", "size": 6, "symbol": "diamond"},
+        "commerce": {"color": "#ff7f0e", "size": 6, "symbol": "star"},
+        "leisure": {"color": "#e377c2", "size": 6, "symbol": "hexagon"},
+        "crossing": {"color": "#f1c40f", "size": 6, "symbol": "square-open"},
+        "cyclist": {"color": "#2ca02c", "size": 6, "symbol": "triangle-up"},
     }
     poi_labels = {"residence": "🏠", "work": "🏢", "commerce": "🛍️", "leisure": "🎯"}
     for kind, points in nodes_by_kind.items():
@@ -232,9 +216,9 @@ def build_map_figure(
             y=agent_y,
             mode="markers+text" if show_agent_labels else "markers",
             marker=dict(
-                size=12,
-                color="#1f77b4",
-                line=dict(width=1, color="#0b3d91"),
+                size=10,
+                color="#d62728",
+                line=dict(width=1, color="#a92122"),
                 symbol="triangle-up",
                 angle=agent_angles,
             ),
@@ -368,77 +352,78 @@ def create_app() -> Dash:
                                                 max=200,
                                                 step=1,
                                             ),
-                                            html.Label("Map Size"),
-                                            dcc.Dropdown(
-                                                id="map-size",
-                                                options=[
-                                                    {"label": "Small (12x8)", "value": "small"},
-                                                    {"label": "Medium (20x14)", "value": "medium"},
-                                                    {"label": "Large (28x20)", "value": "large"},
-                                                ],
-                                                value="medium",
-                                            ),
-                                            html.Label("Homes (count)"),
-                                            dcc.Input(id="homes-count", type="number", value=12),
-                                            html.Label("Home Clusters"),
+                                            html.Label("Map Scale"),
                                             dcc.Input(
-                                                id="homes-cluster-count",
+                                                id="map-scale-input",
                                                 type="number",
-                                                value=2,
-                                                min=1,
-                                                max=6,
-                                                step=1,
+                                                min=50,
+                                                max=10000,
+                                                value=100,
+                                                step=50,
+                                                style={"width": "100%"}
                                             ),
-                                            html.Label("Work Places (count)"),
-                                            dcc.Input(id="work-count", type="number", value=6),
-                                            html.Label("Work Clusters"),
-                                            dcc.Input(
-                                                id="work-cluster-count",
-                                                type="number",
-                                                value=2,
-                                                min=1,
-                                                max=6,
-                                                step=1,
-                                            ),
-                                            html.Label("Commercial Places (count)"),
-                                            dcc.Input(id="commerce-count", type="number", value=6),
-                                            html.Label("Commercial Clusters"),
-                                            dcc.Input(
-                                                id="commerce-cluster-count",
-                                                type="number",
-                                                value=2,
-                                                min=1,
-                                                max=6,
-                                                step=1,
-                                            ),
-                                            html.Label("Leisure Places (count)"),
-                                            dcc.Input(id="leisure-count", type="number", value=6),
-                                            html.Label("Leisure Clusters"),
-                                            dcc.Input(
-                                                id="leisure-cluster-count",
-                                                type="number",
-                                                value=2,
-                                                min=1,
-                                                max=6,
-                                                step=1,
-                                            ),
-                                            html.Label("Lane Intensity"),
+                                            html.Label("Cluster λ (expected # of clusters)"),
                                             dcc.Slider(
-                                                id="lane-intensity",
+                                                id="cluster-lambda",
+                                                min=0.5,
+                                                max=20.0,
+                                                step=0.5,
+                                                value=1.0,
+                                                marks={0.5: "0.5", 5: "5", 10: "10", 15: "15", 20: "20"},
+                                            ),
+                                            html.Label("Homes per Cluster λ"),
+                                            dcc.Slider(
+                                                id="homes-lambda",
+                                                min=1.0,
+                                                max=100.0,
+                                                step=0.5,
+                                                value=4.0,
+                                                marks={1: "1", 25: "25", 50: "50", 75: "75", 100: "100"},
+                                            ),
+                                            html.Label("Other Locations per Cluster λ"),
+                                            dcc.Slider(
+                                                id="other-locations-lambda",
                                                 min=0.0,
-                                                max=1.0,
+                                                max=100.0,
+                                                step=0.5,
+                                                value=4.0,
+                                                marks={0: "0", 25: "25", 50: "50", 75: "75", 100: "100"},
+                                            ),
+                                            html.Label("Cluster Spacing"),
+                                            dcc.Slider(
+                                                id="cluster-spacing",
+                                                min=20.0,
+                                                max=80.0,
+                                                step=5.0,
+                                                value=40.0,
+                                                marks={20: "20", 40: "40", 60: "60", 80: "80"},
+                                            ),
+                                            html.Label("Intra-cluster Dual Road Chance"),
+                                            dcc.Slider(
+                                                id="dual-road-chance",
+                                                min=0.0,
+                                                max=0.8,
                                                 step=0.05,
-                                                value=0.5,
-                                                marks={0.0: "Low", 0.5: "Medium", 1.0: "High"},
+                                                value=0.3,
+                                                marks={0.0: "0%", 0.4: "40%", 0.8: "80%"},
                                             ),
-                                            html.Label("Roundabout Proportion"),
+                                            html.Label("Intra-cluster Roundabout Chance"),
                                             dcc.Slider(
-                                                id="roundabout-ratio",
+                                                id="roundabout-chance",
                                                 min=0.0,
-                                                max=0.4,
-                                                step=0.02,
-                                                value=0.08,
-                                                marks={0.0: "0%", 0.2: "20%", 0.4: "40%"},
+                                                max=0.5,
+                                                step=0.05,
+                                                value=0.15,
+                                                marks={0.0: "0%", 0.25: "25%", 0.5: "50%"},
+                                            ),
+                                            html.Label("Highway Merge Roundabout Chance"),
+                                            dcc.Slider(
+                                                id="highway-roundabout-chance",
+                                                min=0.0,
+                                                max=0.8,
+                                                step=0.05,
+                                                value=0.4,
+                                                marks={0.0: "0%", 0.4: "40%", 0.8: "80%"},
                                             ),
                                             html.Label("Major Junction Proportion"),
                                             dcc.Slider(
@@ -536,7 +521,7 @@ def create_app() -> Dash:
                                                     {"label": "POI Icons", "value": "pois"},
                                                     {"label": "Accident Labels", "value": "accidents"},
                                                 ],
-                                                value=["agents", "destinations", "pois"],
+                                                value=["agents"],
                                                 labelStyle={"display": "block"},
                                             ),
                                             html.H4("Selection Details"),
@@ -603,17 +588,14 @@ def create_app() -> Dash:
         State("seed-input", "value"),
         State("agent-count", "value"),
         State("cyclist-count", "value"),
-        State("map-size", "value"),
-        State("homes-count", "value"),
-        State("homes-cluster-count", "value"),
-        State("work-count", "value"),
-        State("work-cluster-count", "value"),
-        State("commerce-count", "value"),
-        State("commerce-cluster-count", "value"),
-        State("leisure-count", "value"),
-        State("leisure-cluster-count", "value"),
-        State("lane-intensity", "value"),
-        State("roundabout-ratio", "value"),
+        State("map-scale-input", "value"),
+        State("cluster-lambda", "value"),
+        State("homes-lambda", "value"),
+        State("other-locations-lambda", "value"),
+        State("cluster-spacing", "value"),
+        State("dual-road-chance", "value"),
+        State("roundabout-chance", "value"),
+        State("highway-roundabout-chance", "value"),
         State("major-junction-ratio", "value"),
         State("sim-state", "data"),
         prevent_initial_call=True,
@@ -626,17 +608,14 @@ def create_app() -> Dash:
         seed,
         agent_count,
         cyclist_count,
-        map_size,
-        homes_count,
-        homes_cluster_count,
-        work_count,
-        work_cluster_count,
-        commerce_count,
-        commerce_cluster_count,
-        leisure_count,
-        leisure_cluster_count,
-        lane_intensity,
-        roundabout_ratio,
+        map_scale,
+        cluster_lambda,
+        homes_lambda,
+        other_locations_lambda,
+        cluster_spacing,
+        dual_road_chance,
+        roundabout_chance,
+        highway_roundabout_chance,
         major_junction_ratio,
         state,
     ):
@@ -646,17 +625,14 @@ def create_app() -> Dash:
                 seed,
                 agent_count,
                 cyclist_count,
-                map_size,
-                homes_count,
-                homes_cluster_count,
-                work_count,
-                work_cluster_count,
-                commerce_count,
-                commerce_cluster_count,
-                leisure_count,
-                leisure_cluster_count,
-                lane_intensity,
-                roundabout_ratio,
+                map_scale,
+                cluster_lambda,
+                homes_lambda,
+                other_locations_lambda,
+                cluster_spacing,
+                dual_road_chance,
+                roundabout_chance,
+                highway_roundabout_chance,
                 major_junction_ratio,
             )
             sim = Simulation(config)
@@ -671,17 +647,14 @@ def create_app() -> Dash:
                 seed,
                 agent_count,
                 cyclist_count,
-                map_size,
-                homes_count,
-                homes_cluster_count,
-                work_count,
-                work_cluster_count,
-                commerce_count,
-                commerce_cluster_count,
-                leisure_count,
-                leisure_cluster_count,
-                lane_intensity,
-                roundabout_ratio,
+                map_scale,
+                cluster_lambda,
+                homes_lambda,
+                other_locations_lambda,
+                cluster_spacing,
+                dual_road_chance,
+                roundabout_chance,
+                highway_roundabout_chance,
                 major_junction_ratio,
             )
             sim = Simulation(config)
@@ -965,52 +938,29 @@ def _config_from_inputs(
     seed: int,
     agent_count: int,
     cyclist_count: int,
-    map_size: str,
-    homes_count: int,
-    homes_cluster_count: int,
-    work_count: int,
-    work_cluster_count: int,
-    commerce_count: int,
-    commerce_cluster_count: int,
-    leisure_count: int,
-    leisure_cluster_count: int,
-    lane_intensity: float,
-    roundabout_ratio: float,
+    map_scale: float,
+    cluster_lambda: float,
+    homes_lambda: float,
+    other_locations_lambda: float,
+    cluster_spacing: float,
+    dual_road_chance: float,
+    roundabout_chance: float,
+    highway_roundabout_chance: float,
     major_junction_ratio: float,
 ) -> SimulationConfig:
-    size_map = {
-        "small": (12, 8),
-        "medium": (20, 14),
-        "large": (28, 20),
-    }
-    width, height = size_map.get(map_size, (20, 14))
-    default_cluster_count = _default_cluster_count(width, height)
     map_config = MapConfig(
-        width=width,
-        height=height,
-        residential_count=homes_count or 12,
-        residential_cluster_count=homes_cluster_count or default_cluster_count,
-        work_count=work_count or 6,
-        work_cluster_count=work_cluster_count or default_cluster_count,
-        commerce_count=commerce_count or 6,
-        commerce_cluster_count=commerce_cluster_count or default_cluster_count,
-        leisure_count=leisure_count or 6,
-        leisure_cluster_count=leisure_cluster_count or default_cluster_count,
-        lane_intensity=lane_intensity if lane_intensity is not None else 0.5,
-        roundabout_ratio=roundabout_ratio if roundabout_ratio is not None else 0.08,
+        cluster_lambda=cluster_lambda if cluster_lambda is not None else 1.0,
+        homes_per_cluster_lambda=homes_lambda if homes_lambda is not None else 4.0,
+        other_locations_per_cluster_lambda=other_locations_lambda if other_locations_lambda is not None else 4.0,
+        map_scale=map_scale if map_scale is not None else 100.0,
+        min_cluster_spacing=cluster_spacing if cluster_spacing is not None else 40.0,
+        intra_cluster_dual_road_chance=dual_road_chance if dual_road_chance is not None else 0.3,
+        intra_cluster_roundabout_chance=roundabout_chance if roundabout_chance is not None else 0.15,
+        highway_merge_roundabout_chance=highway_roundabout_chance if highway_roundabout_chance is not None else 0.4,
         major_junction_ratio=major_junction_ratio if major_junction_ratio is not None else 0.14,
     )
     driver_config = DriverConfig(count=agent_count or 20, cyclist_count=cyclist_count or 0)
     return SimulationConfig(seed=seed or 42, map_config=map_config, driver_config=driver_config)
-
-
-def _default_cluster_count(width: int, height: int) -> int:
-    largest = max(width, height)
-    if largest < 16:
-        return 1
-    if largest < 24:
-        return 2
-    return 3
 
 
 def _serialize_sim(simulation: Simulation) -> dict:

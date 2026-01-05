@@ -39,8 +39,9 @@ class SimulationStepResult:
 
 class Simulation:
     def __init__(self, config: SimulationConfig) -> None:
-        if config.map_config.residential_count < config.driver_config.count:
-            map_config = replace(config.map_config, residential_count=config.driver_config.count)
+        # Ensure minimum residences can accommodate drivers
+        if config.map_config.min_residences < config.driver_config.count:
+            map_config = replace(config.map_config, min_residences=config.driver_config.count)
             self.config = replace(config, map_config=map_config)
         else:
             self.config = config
@@ -243,14 +244,12 @@ class Simulation:
     def _build_navigation_graph(self, map_data: MapData) -> Dict[int, List[Tuple[int, float]]]:
         adjacency: Dict[int, List[Tuple[int, float]]] = {node_id: [] for node_id in map_data.nodes}
         for edge in map_data.edges:
-            if edge.has_cycle_lane:
-                continue
             weight = self._edge_weight(edge.road_type)
             adjacency[edge.start].append((edge.end, weight))
         return adjacency
 
     def _edge_weight(self, road_type: str) -> float:
-        weights = {"highway": 0.7, "two_lane": 0.9, "single_lane": 1.0}
+        weights = {"highway": 0.7, "dual_carriageway": 0.85, "single_lane": 1.0}
         return weights.get(road_type, 1.0)
 
     def _find_route(self, start: int, goal: int) -> List[int]:

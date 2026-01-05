@@ -30,7 +30,6 @@ def accident_probability(edge: Edge, driver: DriverProfile, time_of_day: str) ->
     speed_factor = 1.0 + (edge.speed_limit / 80.0) * driver.speed_bias
     road_type_factor = {"single_lane": 1.05, "two_lane": 1.0, "highway": 1.2}.get(edge.road_type, 1.0)
     crossing_factor = 1.15 if edge.has_crossing else 1.0
-    cyclist_factor = 1.1 if edge.has_cycle_lane else 1.0
     return (
         0.002
         * edge.risk_factor
@@ -39,7 +38,6 @@ def accident_probability(edge: Edge, driver: DriverProfile, time_of_day: str) ->
         * speed_factor
         * road_type_factor
         * crossing_factor
-        * cyclist_factor
     )
 
 
