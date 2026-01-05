@@ -108,6 +108,8 @@ class MapGenerator:
                 idx += 1
 
         node_positions = {(node.x, node.y): node_id for node_id, node in nodes.items()}
+        road_types = list(self.config.road_type_weights.keys())
+        road_weights = list(self.config.road_type_weights.values())
         for node in nodes.values():
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 neighbor = node_positions.get((node.x + dx, node.y + dy))
@@ -126,6 +128,11 @@ class MapGenerator:
                 lanes = self.config.lanes_by_type.get(road_type, 1)
                 risk_factor = self.random.uniform(0.8, 1.4)
                 has_crossing = node.kind == "crossing" or neighbor_node.kind == "crossing"
+                road_type = self.random.choices(road_types, weights=road_weights, k=1)[0]
+                speed_limit = self.config.speed_limits_by_type.get(road_type, 30)
+                lanes = self.config.lanes_by_type.get(road_type, 1)
+                risk_factor = self.random.uniform(0.8, 1.4)
+                has_crossing = node.kind == "crossing" or nodes[neighbor].kind == "crossing"
                 has_cycle_lane = self.random.random() < self.config.cycle_lane_chance
                 edges.append(
                     Edge(
