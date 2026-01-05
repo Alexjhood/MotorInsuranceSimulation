@@ -28,7 +28,7 @@ def main() -> None:
         from simulator.ui.app import create_app
 
         app = create_app()
-        app.run_server(debug=True)
+        app.run(debug=True)
         return
 
     config = SimulationConfig(

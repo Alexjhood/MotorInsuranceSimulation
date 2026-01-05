@@ -136,11 +136,12 @@ def create_app() -> Dash:
 
     @app.callback(
         Output("sim-graph", "figure"),
-        Output("accident-store", "data"),
+        Output("accident-store", "data", allow_duplicate=True),
         Output("summary-output", "children"),
         Input("tick", "n_intervals"),
         State("sim-state", "data"),
         State("accident-store", "data"),
+        prevent_initial_call=True,
     )
     def advance_simulation(_, state, accidents):
         if state is None:
