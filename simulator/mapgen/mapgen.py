@@ -12,7 +12,7 @@ class Node:
     node_id: int
     x: int
     y: int
-    kind: str = "junction"  # junction, roundabout, residence, work, commerce, leisure, crossing, cyclist
+    kind: str = "junction"  # junction, major_junction, minor_junction, roundabout, residence, work, commerce, leisure, crossing, cyclist
     district: str = "mixed"  # residential, commercial, work, mixed
 
 
@@ -62,6 +62,10 @@ class MapGenerator:
         for node in nodes.values():
             node.district = self._assign_cluster(node, clusters)
 
+        node_positions = {(node.x, node.y): node_id for node_id, node in nodes.items()}
+        trunk_positions = self._carve_trunk_routes(nodes, adjacency, node_positions, clusters, node_id)
+        node_id = max(nodes.keys(), default=-1) + 1
+
         node_ids = list(nodes.keys())
         self.random.shuffle(node_ids)
         roundabouts = node_ids[: self.config.roundabout_count]
@@ -107,9 +111,9 @@ class MapGenerator:
                 pois[kind].append(node_id)
                 idx += 1
 
-        node_positions = {(node.x, node.y): node_id for node_id, node in nodes.items()}
         single_weight = self.config.road_type_weights.get("single_lane", 0.6)
         two_weight = self.config.road_type_weights.get("two_lane", 0.4)
+        highway_weight = self.config.road_type_weights.get("highway", 0.0)
         total_weight = single_weight + two_weight or 1.0
         for node in nodes.values():
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -117,8 +121,18 @@ class MapGenerator:
                 if neighbor is None:
                     continue
                 neighbor_node = nodes[neighbor]
-                if node.district != neighbor_node.district:
+                if (node.x, node.y) in trunk_positions and (neighbor_node.x, neighbor_node.y) in trunk_positions:
                     road_type = "highway"
+                elif node.district != neighbor_node.district:
+                    road_type = "highway"
+                elif highway_weight and (
+                    (node.x, node.y) in trunk_positions or (neighbor_node.x, neighbor_node.y) in trunk_positions
+                ):
+                    road_type = self.random.choices(
+                        ["single_lane", "two_lane", "highway"],
+                        weights=[single_weight, two_weight, highway_weight],
+                        k=1,
+                    )[0]
                 else:
                     road_type = self.random.choices(
                         ["single_lane", "two_lane"],
@@ -144,7 +158,89 @@ class MapGenerator:
                 )
                 adjacency[node.node_id].append(neighbor)
 
+        self._assign_junction_types(nodes, adjacency, trunk_positions)
         return MapData(nodes=nodes, edges=edges, adjacency=adjacency, pois=pois)
+
+    def _carve_trunk_routes(
+        self,
+        nodes: Dict[int, Node],
+        adjacency: Dict[int, List[int]],
+        node_positions: Dict[Tuple[int, int], int],
+        clusters: Dict[str, List[Tuple[int, int]]],
+        node_id: int,
+    ) -> set[Tuple[int, int]]:
+        trunk_positions: set[Tuple[int, int]] = set()
+        residential = clusters.get("residential", [])
+        commercial = clusters.get("commercial", [])
+        work = clusters.get("work", [])
+        pair_count = min(len(residential), len(commercial), len(work))
+        trunk_pairs: List[Tuple[Tuple[int, int], Tuple[int, int]]] = []
+        for idx in range(pair_count):
+            trunk_pairs.extend(
+                [
+                    (residential[idx], commercial[idx]),
+                    (commercial[idx], work[idx]),
+                    (residential[idx], work[idx]),
+                ]
+            )
+        if not trunk_pairs:
+            centers = [*residential, *commercial, *work]
+            if len(centers) >= 2:
+                trunk_pairs.append((centers[0], centers[-1]))
+
+        def ensure_node(x: int, y: int) -> int:
+            nonlocal node_id
+            existing = node_positions.get((x, y))
+            if existing is not None:
+                return existing
+            nodes[node_id] = Node(node_id=node_id, x=x, y=y)
+            nodes[node_id].district = self._assign_cluster(nodes[node_id], clusters)
+            adjacency[node_id] = []
+            node_positions[(x, y)] = node_id
+            node_id += 1
+            return node_id - 1
+
+        for start, end in trunk_pairs:
+            for x, y in self._manhattan_path(start, end):
+                ensure_node(x, y)
+                trunk_positions.add((x, y))
+        return trunk_positions
+
+    def _manhattan_path(self, start: Tuple[int, int], end: Tuple[int, int]) -> List[Tuple[int, int]]:
+        path = []
+        x, y = start
+        end_x, end_y = end
+        step_x = 1 if end_x >= x else -1
+        step_y = 1 if end_y >= y else -1
+        while x != end_x:
+            path.append((x, y))
+            x += step_x
+        while y != end_y:
+            path.append((x, y))
+            y += step_y
+        path.append((x, y))
+        return path
+
+    def _assign_junction_types(
+        self,
+        nodes: Dict[int, Node],
+        adjacency: Dict[int, List[int]],
+        trunk_positions: set[Tuple[int, int]],
+    ) -> None:
+        junction_nodes = [
+            node_id
+            for node_id, node in nodes.items()
+            if node.kind == "junction" and (node.x, node.y) in trunk_positions
+        ]
+        if not junction_nodes:
+            junction_nodes = [node_id for node_id, node in nodes.items() if node.kind == "junction"]
+        junction_nodes.sort(key=lambda nid: len(adjacency.get(nid, [])), reverse=True)
+        major_count = max(1, len(junction_nodes) // 8)
+        major_set = set(junction_nodes[:major_count])
+        for node_id, node in nodes.items():
+            if node.kind != "junction":
+                continue
+            node.kind = "major_junction" if node_id in major_set else "minor_junction"
 
     def _build_clusters(self, nodes: List[Node]) -> Dict[str, List[Tuple[int, int]]]:
         cluster_count = max(1, min(3, (self.config.width + self.config.height) // 18))

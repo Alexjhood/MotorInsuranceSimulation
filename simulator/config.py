@@ -8,7 +8,7 @@ from typing import Dict, List
 class MapConfig:
     width: int = 20
     height: int = 14
-    road_density: float = 0.85
+    road_density: float = 0.65
     roundabout_count: int = 3
     residential_count: int = 12
     work_count: int = 6
