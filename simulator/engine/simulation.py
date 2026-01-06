@@ -31,6 +31,7 @@ class AgentState:
     lane_index: int
     wait_steps: int
     is_idle: bool = True  # True when agent is not on a journey
+    journey_distance: float = 0.0
 
 
 @dataclass
@@ -75,6 +76,12 @@ class Simulation:
         self.step_index = 0
         self.event_log: List[dict] = []
         self.accidents: List[AccidentEvent] = []
+        self.total_distance = 0.0
+        self.total_journeys_started = 0
+        self.total_journeys_completed = 0
+        self.total_journey_distance = 0.0
+        self.journey_distances: List[float] = []
+        self.node_visit_counts = {node_id: 0 for node_id in self.map_data.nodes}
         self._init_agents()
 
     def _pick_node(self, kind: str) -> int:
@@ -118,6 +125,7 @@ class Simulation:
                 lane_index=0,
                 wait_steps=0,
                 is_idle=True,
+                journey_distance=0.0,
             )
             agent_id += 1
             
@@ -139,6 +147,7 @@ class Simulation:
                 lane_index=0,
                 wait_steps=0,
                 is_idle=True,
+                journey_distance=0.0,
             )
             agent_id += 1
 
@@ -193,6 +202,8 @@ class Simulation:
                 agent.route = self._find_route(agent.current_node, agent.destination_node)
                 agent.route_index = 0
                 agent.is_idle = False
+                agent.journey_distance = 0.0
+                self.total_journeys_started += 1
             else:
                 # Stay idle
                 return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "idle"}
@@ -201,6 +212,11 @@ class Simulation:
         if agent.route_index + 1 >= len(agent.route):
             # Arrived at destination, become idle
             agent.is_idle = True
+            if agent.journey_distance > 0:
+                self.total_journeys_completed += 1
+                self.total_journey_distance += agent.journey_distance
+                self.journey_distances.append(agent.journey_distance)
+                agent.journey_distance = 0.0
             return {"agent_id": agent.agent_id, "node": agent.current_node, "action": "arrived"}
         
         # Continue journey
@@ -219,6 +235,11 @@ class Simulation:
         agent.current_node = next_node
         agent.heading = desired_heading
         agent.wait_steps = self._node_wait_steps(next_node)
+        dx = target_node.x - current_node.x
+        dy = target_node.y - current_node.y
+        distance = (dx * dx + dy * dy) ** 0.5
+        agent.journey_distance += distance
+        self.total_distance += distance
         return {"agent_id": agent.agent_id, "node": next_node, "action": "move"}
 
     @staticmethod
@@ -250,6 +271,8 @@ class Simulation:
         node_occupancy: Dict[int, List[int]] = {}
         for agent in self.agents.values():
             node_occupancy.setdefault(agent.current_node, []).append(agent.agent_id)
+        for node_id, agents_at_node in node_occupancy.items():
+            self.node_visit_counts[node_id] = self.node_visit_counts.get(node_id, 0) + len(agents_at_node)
         timing.occupancy_calc_ms = (time.perf_counter() - t0) * 1000
 
         # Phase 4: Unilateral accidents

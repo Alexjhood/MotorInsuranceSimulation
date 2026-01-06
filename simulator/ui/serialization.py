@@ -97,6 +97,7 @@ def serialize_sim(simulation: Simulation) -> Dict[str, Any]:
                 "lane_index": agent.lane_index,
                 "wait_steps": agent.wait_steps,
                 "is_idle": agent.is_idle,
+                "journey_distance": agent.journey_distance,
             }
         )
     return {
@@ -115,6 +116,14 @@ def serialize_sim(simulation: Simulation) -> Dict[str, Any]:
         ],
         "agents": agents,
         "accidents": [accident.__dict__ for accident in simulation.accidents],
+        "metrics": {
+            "total_distance": simulation.total_distance,
+            "total_journeys_started": simulation.total_journeys_started,
+            "total_journeys_completed": simulation.total_journeys_completed,
+            "total_journey_distance": simulation.total_journey_distance,
+            "journey_distances": simulation.journey_distances,
+            "node_visit_counts": simulation.node_visit_counts,
+        },
     }
 
 
@@ -140,6 +149,14 @@ def deserialize_sim(state: Dict[str, Any]) -> Simulation:
     if "random_state" in state:
         rs = state["random_state"]
         simulation.random.setstate((rs[0], tuple(rs[1]), rs[2]))
+    metrics = state.get("metrics", {})
+    simulation.total_distance = metrics.get("total_distance", 0.0)
+    simulation.total_journeys_started = metrics.get("total_journeys_started", 0)
+    simulation.total_journeys_completed = metrics.get("total_journeys_completed", 0)
+    simulation.total_journey_distance = metrics.get("total_journey_distance", 0.0)
+    simulation.journey_distances = metrics.get("journey_distances", [])
+    node_visit_counts = metrics.get("node_visit_counts", simulation.node_visit_counts)
+    simulation.node_visit_counts = {int(k): v for k, v in node_visit_counts.items()}
     simulation.accidents = [AccidentEvent(**accident) for accident in state.get("accidents", [])]
     for agent in state["agents"]:
         sim_agent = simulation.agents[agent["agent_id"]]
@@ -155,4 +172,5 @@ def deserialize_sim(state: Dict[str, Any]) -> Simulation:
         sim_agent.wait_steps = agent.get("wait_steps", 0)
         sim_agent.is_idle = agent.get("is_idle", True)
         sim_agent.home_label = agent.get("home_label", sim_agent.home_label)
+        sim_agent.journey_distance = agent.get("journey_distance", 0.0)
     return simulation

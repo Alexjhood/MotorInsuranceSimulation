@@ -33,6 +33,21 @@ def register_selection_callbacks(app: dash.Dash) -> None:
                 ]
             )
             return dash.no_update, {"type": "accident", **custom}, detail
+        if custom.get("type") == "accident_summary":
+            severity = custom.get("severity_counts", {})
+            detail = html.Ul(
+                [
+                    html.Li(f"Location: {custom.get('location')}"),
+                    html.Li(f"Accident count: {custom.get('count')}"),
+                    html.Li(
+                        "Severity mix: "
+                        + ", ".join(f"{level}: {count}" for level, count in severity.items())
+                        if severity
+                        else "Severity mix: n/a"
+                    ),
+                ]
+            )
+            return dash.no_update, {"type": "accident_summary", **custom}, detail
         return dash.no_update, dash.no_update, dash.no_update
 
     @app.callback(
@@ -78,6 +93,20 @@ def register_selection_callbacks(app: dash.Dash) -> None:
                     html.Li(f"Severity: {selected_item.get('severity')}"),
                     html.Li(f"Participants: {selected_item.get('participants')}"),
                     html.Li(f"Total claim: {selected_item.get('total_claim'):.2f}"),
+                ]
+            )
+        if selected_item.get("type") == "accident_summary":
+            severity = selected_item.get("severity_counts", {})
+            return html.Ul(
+                [
+                    html.Li(f"Location: {selected_item.get('location')}"),
+                    html.Li(f"Accident count: {selected_item.get('count')}"),
+                    html.Li(
+                        "Severity mix: "
+                        + ", ".join(f"{level}: {count}" for level, count in severity.items())
+                        if severity
+                        else "Severity mix: n/a"
+                    ),
                 ]
             )
         if selected_item.get("type") == "agent":
