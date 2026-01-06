@@ -9,36 +9,48 @@ This document provides deeper details about how each module works and how to ext
 - `SimulationConfig`
   - `seed`: controls deterministic replay.
   - `steps`: number of simulation steps per run.
-  - `map_config`: size/density/POI configuration.
-  - `driver_config`: driver population settings.
-  - `time_of_day`: impacts accident probabilities.
+  - `map_config`: clustered map generation parameters.
+  - `driver_config`: journey start probabilities and risk distribution.
+  - `accident_config`: base probabilities and risk multipliers.
+  - `time_of_day`: currently stored but not applied in the simulation step.
   - `enable_parallel`: reserved for future per-step parallelism.
   - `parallel_workers`: batch parallelism count.
 
 - `MapConfig`
-  - `width`, `height`: map grid dimensions.
-  - `road_density`: probability of nodes existing in each grid cell.
-  - `roundabout_count`: number of roundabouts.
-  - `residential_count`, `work_count`, `commerce_count`, `leisure_count`: POI counts.
-  - `pedestrian_crossing_count`, `cyclist_hub_count`: mobility POI counts.
-  - `road_type_weights`: weighted distribution of road types.
+  - `cluster_lambda`: expected number of clusters (Poisson).
+  - `homes_per_cluster_lambda`, `other_locations_per_cluster_lambda`: Poisson rates for home and non-home nodes.
+  - `map_scale`, `cluster_radius`, `min_cluster_spacing`: cluster placement bounds.
+  - `intra_cluster_roundabout_chance`, `intra_cluster_dual_road_chance`: local road variety.
+  - `highway_merge_roundabout_chance`, `major_junction_ratio`: highway/junction shaping.
+  - `cluster_type_weights`: residential/work/commerce/leisure mix.
+  - `min_residences`, `min_workplaces`, `min_commerce`, `min_leisure`: POI minimums.
+  - `pedestrian_crossing_ratio`, `cyclist_hub_ratio`: mobility POI ratios.
   - `speed_limits_by_type`: per-road-type speed limits.
   - `lanes_by_type`: per-road-type lane counts.
   - `cycle_lane_chance`: probability a segment has a cycle lane.
 
 - `DriverConfig`
-  - `count`: number of drivers.
+  - `journey_start_probability`: driver trip start probability per step when idle.
+  - `cyclist_journey_start_probability`: cyclist trip start probability per step when idle.
   - `risk_profiles`: probabilities for low/medium/high drivers.
+
+- `AccidentConfig`
+  - `unilateral_probability`: per-driver per-step incident probability.
+  - `vehicle_encounter_probability`: base multi-vehicle encounter probability.
+  - `cyclist_encounter_probability`: base vehicle-cyclist encounter probability.
+  - `road_type_multipliers`: multipliers per road type.
+  - `junction_multipliers`: multipliers per junction type.
 
 ---
 
-## Map Generation (`simulator/mapgen/mapgen.py`)
+## Map Generation (`simulator/mapgen/generator.py`)
 
-- `MapGenerator.generate()` builds a grid-based graph with metadata.
-- `Node.kind` values: `junction`, `roundabout`, `residence`, `work`, `commerce`, `leisure`, `crossing`, `cyclist`.
-- `Node.district` partitions the map into residential, commercial, and work bands.
+- `MapGenerator.generate()` builds a clustered graph with highways between clusters.
+- Clusters are sampled from Poisson processes and spaced apart on a `map_scale` plane.
+- Nodes start as residences or junctions, then POIs are assigned by cluster type.
+- Highway routes connect cluster entry nodes with roundabouts at merges.
+- `Node.kind` values: `junction`, `major_junction`, `minor_junction`, `roundabout`, `residence`, `work`, `commerce`, `leisure`, `crossing`, `cyclist`, `highway_junction`.
 - `Edge` includes speed limits, risk factors, road type, lane count, and cycle/crossing flags.
-- `shortest_path()` computes a basic BFS route for agent navigation.
 
 ---
 
@@ -46,16 +58,16 @@ This document provides deeper details about how each module works and how to ext
 
 - `driver.py`: defines `DriverProfile` and the speed/aggression settings by risk tier.
 - `vehicle.py`: defines `VehicleProfile` and default vehicle classes.
+- Each residence spawns one driver agent and one cyclist agent.
 
 ---
 
 ## Accidents (`simulator/accidents/model.py`)
 
-- `accident_probability()` evaluates crash probability per step based on:
-  - edge risk, time of day, driver risk, speed.
-  - road type, pedestrian crossings, and cycle lanes.
-- `build_accident()` emits a single event with:
-  - participants, severity, at-fault, and claim estimates.
+- `build_accident()` emits a single event with participants, severity, at-fault, and claim estimates.
+- Accident severity is derived from impact speed; claims use vehicle value and severity.
+- Liability uses driver risk levels to weight fault assignment.
+- The simulation applies per-step probabilities plus road/junction multipliers.
 
 ---
 
@@ -63,9 +75,12 @@ This document provides deeper details about how each module works and how to ext
 
 - `Simulation`
   - Owns the map, agents, and event log.
-  - `step()` advances all agents, evaluates accidents, logs events.
-  - Agents cycle between home, work, and commerce/leisure destinations.
+  - `step()` advances all agents, assigns lanes, tallies occupancy, evaluates accidents, logs events.
+  - Agents are idle until a journey start probability triggers a new trip.
+  - Routes are A* paths weighted by road type (highways preferred).
   - Each agent tracks a destination and previous node for heading visualization.
+  - Roundabouts and major junctions add per-node wait steps.
+  - Per-step progress data is captured for the UI (phase timing + summaries).
   - `run()` advances for a configured number of steps.
 
 - `SimulationRunner`
@@ -80,21 +95,27 @@ This document provides deeper details about how each module works and how to ext
   - total accidents
   - severity breakdown
   - total claim amount
-  - hotspots and impacted agents
+  - hotspots, road type, and location kind breakdowns
+  - journey stats (distance, counts, length distribution)
+  - traffic stats (node visit counts, top traffic nodes)
 
 ---
 
 ## UI (`simulator/ui/app.py`)
 
 - Dash control panel for:
-  - seed, agent count, map size
-  - start, pause, step, back, reset
-  - playback speed
-- Visualization panel:
-  - district-aware roads with lane offsets and cycle lanes
-  - POI markers with icons offset from roads
-  - numbered vehicles with selectable routes
-  - accident markers
+  - seed, cluster/map shaping, journey probabilities, accident probabilities
+  - start, pause, step, back, reset, playback speed
+  - zoom/pan, label toggles, and visualization on/off
+- Logging panel:
+  - step log with filters
+  - live progress of the current step's phases
+  - timing summaries and step-level breakdowns
+- Summary panel:
+  - run summary stats for accidents, journeys, and traffic
+- Server-side cache:
+  - avoids regenerating the map on every callback
+  - render gating ensures steps do not advance before render completes
 
 ---
 

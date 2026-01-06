@@ -1,15 +1,15 @@
 # Motor Insurance Simulation (Prototype)
 
-This repository contains a **Python-based traffic simulator** with a focus on **insurance costs**. The model is intentionally simplified to make it easy to visualize and iterate on. Vehicles move in discrete steps, accidents are evaluated stochastically at each step, and summaries are produced for underwriting-style analysis.
+This repository contains a **Python-based traffic simulator** with a focus on **insurance costs**. The model is intentionally simplified to make it easy to visualize and iterate on. The simulator generates a clustered road network, spawns both drivers and cyclists, advances them in discrete steps, evaluates accidents stochastically, and produces summary metrics for underwriting-style analysis.
 
 ## Features
 
-- **Synthetic map generation** with district zoning, road types, cycle lanes, pedestrian crossings, roundabouts, and POIs.
-- **Agent-based traffic** with driver risk profiles and vehicle attributes.
-- **Accident modeling** including severity, liability assignment, and claims estimates.
-- **Dash UI** with playback controls, agent selection, zoom/pan, and live visualization.
-- **Deterministic replay** via seeded simulations.
-- **Headless runs** and **parallel batch runs** for performance testing.
+- **Cluster-based map generation** with residential/work/commerce/leisure clusters, highways, roundabouts, and junction types.
+- **POIs and mobility nodes** (homes, work, commerce, leisure, crossings, cyclist hubs).
+- **Dual population** of driver and cyclist agents, each with distinct behaviors.
+- **Accident modeling** for single-vehicle, multi-vehicle, and vehicle-cyclist encounters with claims and liability.
+- **Dash UI** with setup sliders, playback controls, live progress, timing breakdowns, summary panels, and map visualization.
+- **Deterministic replay** via seeded simulations, plus batch parallel runs via the engine runner.
 
 ---
 
@@ -32,7 +32,7 @@ python -m simulator.cli --serve
 ### 3) Run a headless simulation
 
 ```bash
-python -m simulator.cli --headless --steps 200 --agents 25
+python -m simulator.cli --headless --steps 200
 ```
 
 ### 4) Run multiple simulations in parallel (batch mode)
@@ -41,27 +41,30 @@ python -m simulator.cli --headless --steps 200 --agents 25
 python -m simulator.cli --headless --parallel-runs 4 --steps 200
 ```
 
+Note: the CLI headless arguments are currently out of sync with `MapConfig`/`DriverConfig` and may error. For headless runs and full control, use the Python API in `simulator/engine`.
+
 ---
 
 ## Simulation Model (High-Level)
 
 ### Movement
 - Each agent moves **one node per step** on a generated road graph.
-- Routes are shortest paths between home, work, and commerce/leisure nodes.
-- Agents cycle destinations between work, home, and optional commerce/leisure stops.
-- Homes are unique per agent when possible.
+- Agents are idle until a **journey start probability** triggers a new trip.
+- Routes are A* paths weighted by road type (highways are preferred).
+- Agents wait at major junctions and roundabouts to simulate delays.
+- Drivers and cyclists both move between homes, work, commerce, leisure, and cyclist hubs.
 
 ### Driver & Vehicle Profiles
-- Driver risk profile influences speed bias and accident probability.
-- Vehicle class influences value and safety rating.
+- Driver risk profile influences speed bias and liability.
+- Vehicles influence value and claim estimates.
+- Each residence spawns one driver **and** one cyclist.
 
 ### Accident Modeling
-- **Single-vehicle incidents** are sampled per agent per step.
-- **Multi-vehicle collisions** occur when multiple agents occupy the same node.
-- Severity is based on speed and a stochastic factor.
-- Claim amounts are derived from vehicle value and severity.
-- Liability is assigned probabilistically based on driver risk.
-- Road type, crossings, and cycle lanes influence accident likelihood.
+- **Single-vehicle incidents** are sampled for active drivers only.
+- **Multi-agent collisions** include driver-driver and driver-cyclist encounters.
+- Severity is derived from impact speed; claim amounts are derived from vehicle value.
+- Liability is assigned probabilistically based on driver risk profile.
+- Road type and junction type apply multiplicative risk modifiers.
 
 ---
 
@@ -71,7 +74,8 @@ Headless runs output a JSON summary, including:
 - Total accidents
 - Severity distribution
 - Total claim value
-- Hotspots and most impacted agents
+- Hotspots, road/junction breakdowns, and most impacted agents
+- Journey and traffic metrics (distance, node visits, journey lengths)
 
 ---
 
@@ -83,7 +87,7 @@ MotorInsuranceSimulation/
 │  ├─ agents/          # driver + vehicle profiles
 │  ├─ accidents/       # accident probability & claims
 │  ├─ engine/          # simulation + runner
-│  ├─ mapgen/          # synthetic map generation
+│  ├─ mapgen/          # clustered map generation
 │  ├─ reporting/       # summary metrics
 │  ├─ ui/              # Dash visualization
 │  ├─ cli.py           # CLI entrypoint
