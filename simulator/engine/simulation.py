@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import random
 import heapq
+import time
 from typing import Dict, List, Tuple
 
 from simulator.accidents.model import AccidentEvent, accident_probability, build_accident
@@ -33,10 +34,23 @@ class AgentState:
 
 
 @dataclass
+class StepTiming:
+    """Detailed timing breakdown for a simulation step."""
+    agent_movement_ms: float = 0.0
+    lane_assignment_ms: float = 0.0
+    occupancy_calc_ms: float = 0.0
+    unilateral_accidents_ms: float = 0.0
+    multi_agent_accidents_ms: float = 0.0
+    event_logging_ms: float = 0.0
+    total_step_ms: float = 0.0
+
+
+@dataclass
 class SimulationStepResult:
     step: int
     accidents: List[AccidentEvent]
     events: List[dict]
+    timing: StepTiming | None = None
 
 
 class Simulation:
@@ -213,18 +227,33 @@ class Simulation:
         return value / float(1 << 64)
 
     def step(self) -> SimulationStepResult:
+        total_start = time.perf_counter()
+        timing = StepTiming()
+        
         self.step_index += 1
         step_events: List[dict] = []
         accidents: List[AccidentEvent] = []
 
+        # Phase 1: Agent movement
+        t0 = time.perf_counter()
         movements = [self._advance_agent(agent) for agent in self.agents.values()]
         step_events.extend({"type": "movement", **movement, "step": self.step_index} for movement in movements)
-        self._assign_lanes()
+        timing.agent_movement_ms = (time.perf_counter() - t0) * 1000
 
+        # Phase 2: Lane assignment
+        t0 = time.perf_counter()
+        self._assign_lanes()
+        timing.lane_assignment_ms = (time.perf_counter() - t0) * 1000
+
+        # Phase 3: Calculate node occupancy
+        t0 = time.perf_counter()
         node_occupancy: Dict[int, List[int]] = {}
         for agent in self.agents.values():
             node_occupancy.setdefault(agent.current_node, []).append(agent.agent_id)
+        timing.occupancy_calc_ms = (time.perf_counter() - t0) * 1000
 
+        # Phase 4: Unilateral accidents
+        t0 = time.perf_counter()
         for node_id, agents_at_node in node_occupancy.items():
             if len(agents_at_node) < 1:
                 continue
@@ -258,6 +287,18 @@ class Simulation:
                         rng=rng,
                     )
                     accidents.append(accident)
+        timing.unilateral_accidents_ms = (time.perf_counter() - t0) * 1000
+
+        # Phase 5: Multi-agent accidents
+        t0 = time.perf_counter()
+        for node_id, agents_at_node in node_occupancy.items():
+            if len(agents_at_node) < 1:
+                continue
+            
+            edge = self.node_edge.get(node_id, self.default_edge)
+            multiplier = self.node_accident_multiplier.get(node_id, 1.0)
+            accident_config = self.config.accident_config
+            active_agents = [aid for aid in agents_at_node if not self.agents[aid].is_idle]
 
             # Multi-agent encounters
             if len(active_agents) > 1:
@@ -306,7 +347,10 @@ class Simulation:
                                 rng=random.Random(base_seed + 22),
                             )
                         )
+        timing.multi_agent_accidents_ms = (time.perf_counter() - t0) * 1000
 
+        # Phase 6: Event logging
+        t0 = time.perf_counter()
         for accident in accidents:
             step_events.append({
                 "type": "accident",
@@ -319,7 +363,10 @@ class Simulation:
             self.accidents.append(accident)
 
         self.event_log.extend(step_events)
-        return SimulationStepResult(step=self.step_index, accidents=accidents, events=step_events)
+        timing.event_logging_ms = (time.perf_counter() - t0) * 1000
+        
+        timing.total_step_ms = (time.perf_counter() - total_start) * 1000
+        return SimulationStepResult(step=self.step_index, accidents=accidents, events=step_events, timing=timing)
 
     def _edge_for_node(self, node_id: int) -> "Edge" | None:
         return self.node_edge.get(node_id, self.default_edge)
