@@ -52,6 +52,8 @@ def register_timing_details_callbacks(app: dash.Dash) -> None:
         data_sizes = step_details.get("data_sizes", {})
         if data_sizes:
             def format_size(bytes_count):
+                if bytes_count is None:
+                    return "n/a"
                 if bytes_count > 1_000_000:
                     return f"{bytes_count / 1_000_000:.2f} MB"
                 if bytes_count > 1_000:
@@ -130,12 +132,13 @@ def register_timing_details_callbacks(app: dash.Dash) -> None:
             )
 
             total_out = sum(
-                [
-                    data_sizes.get("state_out", 0),
-                    data_sizes.get("history_out", 0),
-                    data_sizes.get("timing_data_out", 0),
-                    data_sizes.get("log_data_out", 0),
+                size for size in [
+                    data_sizes.get("state_out"),
+                    data_sizes.get("history_out"),
+                    data_sizes.get("timing_data_out"),
+                    data_sizes.get("log_data_out"),
                 ]
+                if isinstance(size, (int, float))
             )
             elements.append(
                 html.Div(
@@ -153,6 +156,46 @@ def register_timing_details_callbacks(app: dash.Dash) -> None:
                     style={"marginBottom": "16px"},
                 )
             )
+
+            data_size_errors = step_details.get("data_size_errors", {})
+            if data_size_errors:
+                elements.append(
+                    html.Div(
+                        [
+                            html.H6("⚠️ Size Measurement Notes", style={"margin": "0 0 8px 0", "color": "#856404"}),
+                            html.Div(
+                                [html.Div(f"{k}: {v}", style={"padding": "2px 0"}) for k, v in data_size_errors.items()]
+                            ),
+                        ],
+                        style={"marginBottom": "16px", "padding": "8px", "backgroundColor": "#fff3cd", "borderRadius": "4px"},
+                    )
+                )
+
+            state_counts = step_details.get("state_counts", {})
+            if state_counts:
+                elements.append(
+                    html.Div(
+                        [
+                            html.H6("📈 State Counts", style={"margin": "0 0 8px 0", "color": "#495057"}),
+                            html.Div(
+                                [
+                                    html.Div(
+                                        f"Input: nodes={state_counts.get('input', {}).get('nodes', 0)}, "
+                                        f"edges={state_counts.get('input', {}).get('edges', 0)}, "
+                                        f"agents={state_counts.get('input', {}).get('agents', 0)}"
+                                    ),
+                                    html.Div(
+                                        f"Output: nodes={state_counts.get('output', {}).get('nodes', 0)}, "
+                                        f"edges={state_counts.get('output', {}).get('edges', 0)}, "
+                                        f"agents={state_counts.get('output', {}).get('agents', 0)}"
+                                    ),
+                                ],
+                                style={"fontSize": "11px"},
+                            ),
+                        ],
+                        style={"marginBottom": "16px", "padding": "8px", "backgroundColor": "#e2e3e5", "borderRadius": "4px"},
+                    )
+                )
 
         timings = step_details.get("timings", [])
         if timings:
