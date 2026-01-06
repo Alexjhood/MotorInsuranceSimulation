@@ -282,6 +282,135 @@ def build_map_figure(
     return fig
 
 
+def build_summary_map_figure(
+    simulation: Simulation,
+    accidents: List[dict],
+    view_bounds: tuple[float, float, float, float] | None = None,
+) -> go.Figure:
+    map_data = simulation.map_data
+    edge_styles = {
+        "single_lane": {"color": "#c0c4cc", "width": 1.4},
+        "dual_carriageway": {"color": "#9aa0a6", "width": 2.2},
+        "highway": {"color": "#5f6368", "width": 2.6},
+    }
+    edge_coords = {key: {"x": [], "y": []} for key in edge_styles}
+    for edge in map_data.edges:
+        start = map_data.nodes[edge.start]
+        end = map_data.nodes[edge.end]
+        coords = edge_coords.get(edge.road_type, edge_coords["single_lane"])
+        dx = end.x - start.x
+        dy = end.y - start.y
+        length = math.hypot(dx, dy) or 1.0
+        perp_x = -dy / length
+        perp_y = dx / length
+        lane_offsets = _lane_offsets(edge.lanes)
+        for offset in lane_offsets:
+            coords["x"] += [start.x + perp_x * offset, end.x + perp_x * offset, None]
+            coords["y"] += [start.y + perp_y * offset, end.y + perp_y * offset, None]
+        if edge.lanes <= 1:
+            coords["x"] += [start.x, end.x, None]
+            coords["y"] += [start.y, end.y, None]
+
+    fig = go.Figure()
+    for road_type, style in edge_styles.items():
+        coords = edge_coords[road_type]
+        fig.add_trace(
+            go.Scatter(
+                x=coords["x"],
+                y=coords["y"],
+                mode="lines",
+                line=dict(color=style["color"], width=style["width"]),
+                name=road_type.replace("_", " "),
+                hoverinfo="skip",
+            )
+        )
+
+    node_visit_counts = simulation.node_visit_counts or {}
+    node_x = []
+    node_y = []
+    node_intensity = []
+    for node_id, node in map_data.nodes.items():
+        count = node_visit_counts.get(node_id, 0)
+        node_x.append(node.x)
+        node_y.append(node.y)
+        node_intensity.append(count)
+
+    if node_x:
+        fig.add_trace(
+            go.Scatter(
+                x=node_x,
+                y=node_y,
+                mode="markers",
+                marker=dict(
+                    size=12,
+                    color=node_intensity,
+                    colorscale="YlOrRd",
+                    opacity=0.6,
+                    showscale=True,
+                    colorbar=dict(title="Traffic intensity"),
+                ),
+                name="traffic intensity",
+                hovertemplate="Node visit count: %{marker.color}<extra></extra>",
+            )
+        )
+
+    accident_counts = {}
+    accident_severity = {}
+    for accident in accidents:
+        location = accident["location"]
+        accident_counts[location] = accident_counts.get(location, 0) + 1
+        accident_severity.setdefault(location, {}).setdefault(accident["severity"], 0)
+        accident_severity[location][accident["severity"]] += 1
+
+    if accident_counts:
+        accident_x = []
+        accident_y = []
+        accident_sizes = []
+        accident_text = []
+        accident_customdata = []
+        for location, count in accident_counts.items():
+            node = map_data.nodes[location]
+            accident_x.append(node.x)
+            accident_y.append(node.y)
+            accident_sizes.append(10 + 4 * math.sqrt(count))
+            severity = accident_severity.get(location, {})
+            accident_text.append(f"{count} accident(s)")
+            accident_customdata.append(
+                {
+                    "type": "accident_summary",
+                    "location": location,
+                    "count": count,
+                    "severity_counts": severity,
+                }
+            )
+        fig.add_trace(
+            go.Scatter(
+                x=accident_x,
+                y=accident_y,
+                mode="markers+text",
+                marker=dict(size=accident_sizes, color="#d62728", symbol="x"),
+                text=accident_text,
+                textposition="top center",
+                name="accident hotspots",
+                customdata=accident_customdata,
+                hovertemplate="Accidents: %{customdata[count]}<extra></extra>",
+            )
+        )
+
+    min_x, max_x, min_y, max_y = view_bounds or _map_bounds(map_data)
+    fig.update_layout(
+        height=640,
+        width=920,
+        margin=dict(l=20, r=20, t=30, b=20),
+        xaxis=dict(showgrid=False, zeroline=False, range=[min_x, max_x], fixedrange=False),
+        yaxis=dict(showgrid=False, zeroline=False, range=[min_y, max_y], fixedrange=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        dragmode="pan",
+        uirevision="map",
+    )
+    return fig
+
+
 def _lane_offsets(lanes: int) -> List[float]:
     if lanes <= 1:
         return [0.0]

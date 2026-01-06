@@ -6,9 +6,8 @@ from simulator.ui.layout.info import build_info_tab
 from simulator.ui.layout.logging import build_logging_tab
 from simulator.ui.layout.running import build_running_tab
 from simulator.ui.layout.setup import build_setup_tab
-from simulator.ui.layout.step_details import build_step_details_tab
+from simulator.ui.layout.summary import build_summary_tab
 from simulator.ui.layout.tabs import get_tab_selected_style, get_tab_style
-from simulator.ui.layout.timing import build_timing_tab
 
 
 def build_layout() -> html.Div:
@@ -46,18 +45,11 @@ def build_layout() -> html.Div:
                                 children=[build_logging_tab()],
                             ),
                             dcc.Tab(
-                                label="⏱️ Time",
-                                value="timing-tab",
-                                style=get_tab_style("timing-tab"),
-                                selected_style=get_tab_selected_style("timing-tab"),
-                                children=[build_timing_tab()],
-                            ),
-                            dcc.Tab(
-                                label="📊 Steps",
-                                value="step-details-tab",
-                                style=get_tab_style("step-details-tab"),
-                                selected_style=get_tab_selected_style("step-details-tab"),
-                                children=[build_step_details_tab()],
+                                label="🧾 Summary",
+                                value="summary-tab",
+                                style=get_tab_style("summary-tab"),
+                                selected_style=get_tab_selected_style("summary-tab"),
+                                children=[build_summary_tab()],
                             ),
                             dcc.Tab(
                                 label="ℹ️ Info",

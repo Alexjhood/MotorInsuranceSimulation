@@ -122,6 +122,16 @@ def register_control_callbacks(app: dash.Dash) -> None:
         return max(int(1000 / max(speed or 1, 0.5)), 100)
 
     @app.callback(
+        Output("tick", "disabled", allow_duplicate=True),
+        Input("control-tabs", "value"),
+        prevent_initial_call=True,
+    )
+    def pause_on_summary(tab_value: str):
+        if tab_value == "summary-tab":
+            return True
+        return dash.no_update
+
+    @app.callback(
         Output("seed-input", "value"),
         Input("seed-random-btn", "n_clicks"),
         prevent_initial_call=True,

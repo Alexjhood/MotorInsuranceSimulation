@@ -2,8 +2,41 @@ from __future__ import annotations
 
 from dash import dcc, html
 
+from simulator.ui.layout.step_details import build_step_details_tab
+from simulator.ui.layout.timing import build_timing_tab
+
 
 def build_logging_tab() -> html.Div:
+    return html.Div(
+        style={"display": "flex", "flexDirection": "column", "gap": "8px"},
+        children=[
+            dcc.Tabs(
+                id="log-tabs",
+                value="log-subtab",
+                style={"borderBottom": "1px solid #dee2e6"},
+                children=[
+                    dcc.Tab(
+                        label="📋 Log",
+                        value="log-subtab",
+                        children=[_build_log_panel()],
+                    ),
+                    dcc.Tab(
+                        label="⏱️ Time",
+                        value="timing-subtab",
+                        children=[build_timing_tab()],
+                    ),
+                    dcc.Tab(
+                        label="📊 Steps",
+                        value="steps-subtab",
+                        children=[build_step_details_tab()],
+                    ),
+                ],
+            )
+        ],
+    )
+
+
+def _build_log_panel() -> html.Div:
     return html.Div(
         style={"display": "flex", "flexDirection": "column", "gap": "8px"},
         children=[

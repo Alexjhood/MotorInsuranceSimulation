@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 
 import dash
@@ -9,19 +8,21 @@ from dash.dependencies import Input, Output, State
 from simulator.config import SimulationConfig
 from simulator.engine.simulation import Simulation
 from simulator.reporting.summary import summarize_run
-from simulator.ui.plotting import _build_placeholder_figure, build_map_figure
+from simulator.ui.plotting import _build_placeholder_figure, build_map_figure, build_summary_map_figure
 from simulator.ui.serialization import deserialize_sim
+from simulator.ui.summary_view import build_summary_content
 
 
 def register_render_callbacks(app: dash.Dash) -> None:
     @app.callback(
         Output("sim-graph", "figure"),
-        Output("summary-output", "children"),
+        Output("summary-content", "children"),
         Output("timing-store", "data", allow_duplicate=True),
         Input("sim-state", "data"),
         Input("accident-store", "data"),
         Input("selected-agent", "data"),
         Input("label-options", "value"),
+        Input("control-tabs", "value"),
         Input("view-store", "data"),
         Input("visualization-toggle", "value"),
         Input("agent-size-slider", "value"),
@@ -34,6 +35,7 @@ def register_render_callbacks(app: dash.Dash) -> None:
         accidents,
         selected_agent,
         label_options,
+        control_tab,
         view_store,
         viz_toggle,
         agent_size,
@@ -48,18 +50,25 @@ def register_render_callbacks(app: dash.Dash) -> None:
             config = SimulationConfig()
             simulation = Simulation(config)
             summary = summarize_run(simulation)
+            summary_content = build_summary_content(summary)
             if show_visualization:
-                figure = build_map_figure(
-                    simulation,
-                    accidents or [],
-                    selected_agent,
-                    label_options,
-                    agent_size_mult=agent_size or 1.0,
-                    other_size_mult=other_size or 1.0,
-                )
+                if control_tab == "summary-tab":
+                    figure = build_summary_map_figure(
+                        simulation,
+                        [accident.__dict__ for accident in simulation.accidents],
+                    )
+                else:
+                    figure = build_map_figure(
+                        simulation,
+                        accidents or [],
+                        selected_agent,
+                        label_options,
+                        agent_size_mult=agent_size or 1.0,
+                        other_size_mult=other_size or 1.0,
+                    )
             else:
                 figure = _build_placeholder_figure("Visualization disabled - simulation running in background")
-            return figure, json.dumps(summary, indent=2), timing_data
+            return figure, summary_content, timing_data
 
         t0 = time.perf_counter()
         simulation = deserialize_sim(state)
@@ -68,6 +77,7 @@ def register_render_callbacks(app: dash.Dash) -> None:
         t0 = time.perf_counter()
         summary = summarize_run(simulation)
         summary_time = (time.perf_counter() - t0) * 1000
+        summary_content = build_summary_content(summary)
 
         if not show_visualization:
             total_render = (time.perf_counter() - render_start) * 1000
@@ -85,7 +95,7 @@ def register_render_callbacks(app: dash.Dash) -> None:
                     "total": total_render,
                     "build_figure": 0,
                 }
-            return figure, json.dumps(summary, indent=2), timing_data
+            return figure, summary_content, timing_data
 
         view_bounds = None
         if view_store:
@@ -97,15 +107,22 @@ def register_render_callbacks(app: dash.Dash) -> None:
             )
 
         t0 = time.perf_counter()
-        figure = build_map_figure(
-            simulation,
-            accidents or [],
-            selected_agent,
-            label_options,
-            view_bounds=view_bounds,
-            agent_size_mult=agent_size or 1.0,
-            other_size_mult=other_size or 1.0,
-        )
+        if control_tab == "summary-tab":
+            figure = build_summary_map_figure(
+                simulation,
+                [accident.__dict__ for accident in simulation.accidents],
+                view_bounds=view_bounds,
+            )
+        else:
+            figure = build_map_figure(
+                simulation,
+                accidents or [],
+                selected_agent,
+                label_options,
+                view_bounds=view_bounds,
+                agent_size_mult=agent_size or 1.0,
+                other_size_mult=other_size or 1.0,
+            )
         figure_time = (time.perf_counter() - t0) * 1000
         total_render = (time.perf_counter() - render_start) * 1000
 
@@ -117,4 +134,4 @@ def register_render_callbacks(app: dash.Dash) -> None:
                 "total": total_render,
             }
 
-        return figure, json.dumps(summary, indent=2), timing_data
+        return figure, summary_content, timing_data

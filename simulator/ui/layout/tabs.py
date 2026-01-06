@@ -4,8 +4,7 @@ TAB_COLORS = {
     "setup-tab": {"bg": "#e3f2fd", "border": "#1976d2", "text": "#1565c0"},
     "running-tab": {"bg": "#e8f5e9", "border": "#388e3c", "text": "#2e7d32"},
     "logging-tab": {"bg": "#fff3e0", "border": "#f57c00", "text": "#e65100"},
-    "timing-tab": {"bg": "#fce4ec", "border": "#c2185b", "text": "#ad1457"},
-    "step-details-tab": {"bg": "#f3e5f5", "border": "#7b1fa2", "text": "#6a1b9a"},
+    "summary-tab": {"bg": "#ede7f6", "border": "#5e35b1", "text": "#4527a0"},
     "info-tab": {"bg": "#e0f7fa", "border": "#0097a7", "text": "#00838f"},
 }
 
