@@ -45,7 +45,18 @@ class Simulation:
         self.random = random.Random(config.seed)
         self.map_data = MapGenerator(self.config.map_config, self.config.seed).generate()
         self.edge_lookup = {(edge.start, edge.end): edge for edge in self.map_data.edges}
+        self.node_edge = {edge.start: edge for edge in self.map_data.edges}
+        self.default_edge = self.map_data.edges[0] if self.map_data.edges else None
+        self.node_wait_steps = {
+            node_id: 1 if node.kind in {"roundabout", "major_junction"} else 0
+            for node_id, node in self.map_data.nodes.items()
+        }
         self.nav_adjacency = self._build_navigation_graph(self.map_data)
+        self.node_accident_multiplier = {
+            node_id: self._compute_accident_multiplier(node_id)
+            for node_id in self.map_data.nodes
+        }
+        self.route_cache: Dict[Tuple[int, int], Tuple[int, ...]] = {}
         self.agents: Dict[int, AgentState] = {}
         self.step_index = 0
         self.event_log: List[dict] = []
@@ -118,8 +129,7 @@ class Simulation:
             agent_id += 1
 
     def _node_wait_steps(self, node_id: int) -> int:
-        node_kind = self.map_data.nodes[node_id].kind
-        return 1 if node_kind in {"roundabout", "major_junction"} else 0
+        return self.node_wait_steps.get(node_id, 0)
 
     def _select_destination(self, agent: AgentState) -> int:
         """Select a destination for the agent. Can include other homes."""
@@ -197,6 +207,11 @@ class Simulation:
         agent.wait_steps = self._node_wait_steps(next_node)
         return {"agent_id": agent.agent_id, "node": next_node, "action": "move"}
 
+    @staticmethod
+    def _rand_float(seed: int) -> float:
+        value = (seed * 6364136223846793005 + 1442695040888963407) & ((1 << 64) - 1)
+        return value / float(1 << 64)
+
     def step(self) -> SimulationStepResult:
         self.step_index += 1
         step_events: List[dict] = []
@@ -213,9 +228,9 @@ class Simulation:
         for node_id, agents_at_node in node_occupancy.items():
             if len(agents_at_node) < 1:
                 continue
-            
-            edge = self._edge_for_node(node_id)
-            multiplier = self._compute_accident_multiplier(node_id, edge)
+
+            edge = self.node_edge.get(node_id, self.default_edge)
+            multiplier = self.node_accident_multiplier.get(node_id, 1.0)
             accident_config = self.config.accident_config
             
             # Only check accidents for agents that are actively moving (not idle)
@@ -225,12 +240,13 @@ class Simulation:
             active_drivers = [aid for aid in active_agents if self.agents[aid].agent_type == "driver"]
             for agent_id in active_drivers:
                 agent = self.agents[agent_id]
-                rng = random.Random(self.config.seed + self.step_index * 1000 + agent_id)
+                base_seed = self.config.seed + self.step_index * 1_000_003 + agent_id * 9_973
                 
                 # Base unilateral probability with multipliers
                 unilateral_prob = accident_config.unilateral_probability * multiplier
                 
-                if rng.random() < unilateral_prob:
+                if self._rand_float(base_seed) < unilateral_prob:
+                    rng = random.Random(base_seed)
                     speed = edge.speed_limit * agent.driver.speed_bias
                     accident = build_accident(
                         step=self.step_index,
@@ -245,7 +261,7 @@ class Simulation:
 
             # Multi-agent encounters
             if len(active_agents) > 1:
-                rng = random.Random(self.config.seed + self.step_index * 2000 + node_id)
+                base_seed = self.config.seed + self.step_index * 2_000_003 + node_id * 9_947
                 
                 # Separate drivers from cyclists
                 drivers = [aid for aid in active_agents if self.agents[aid].agent_type == "driver"]
@@ -254,7 +270,7 @@ class Simulation:
                 # Vehicle-vehicle encounters
                 if len(drivers) > 1:
                     vehicle_prob = accident_config.vehicle_encounter_probability * multiplier
-                    if rng.random() < vehicle_prob:
+                    if self._rand_float(base_seed + 11) < vehicle_prob:
                         participant_ids = drivers[:2]
                         profiles = [self.agents[pid].driver for pid in participant_ids]
                         vehicles = [self.agents[pid].vehicle for pid in participant_ids]
@@ -267,14 +283,14 @@ class Simulation:
                                 driver_profiles=profiles,
                                 vehicle_profiles=vehicles,
                                 speed=speed,
-                                rng=rng,
+                                rng=random.Random(base_seed + 12),
                             )
                         )
                 
                 # Vehicle-cyclist encounters
                 if drivers and cyclists:
                     cyclist_prob = accident_config.cyclist_encounter_probability * multiplier
-                    if rng.random() < cyclist_prob:
+                    if self._rand_float(base_seed + 21) < cyclist_prob:
                         participant_ids = [drivers[0], cyclists[0]]
                         profiles = [self.agents[pid].driver for pid in participant_ids]
                         vehicles = [self.agents[pid].vehicle for pid in participant_ids]
@@ -287,7 +303,7 @@ class Simulation:
                                 driver_profiles=profiles,
                                 vehicle_profiles=vehicles,
                                 speed=speed,
-                                rng=rng,
+                                rng=random.Random(base_seed + 22),
                             )
                         )
 
@@ -305,16 +321,17 @@ class Simulation:
         self.event_log.extend(step_events)
         return SimulationStepResult(step=self.step_index, accidents=accidents, events=step_events)
 
-    def _edge_for_node(self, node_id: int) -> "Edge":
-        for edge in self.map_data.edges:
-            if edge.start == node_id:
-                return edge
-        return self.map_data.edges[0]
+    def _edge_for_node(self, node_id: int) -> "Edge" | None:
+        return self.node_edge.get(node_id, self.default_edge)
 
-    def _compute_accident_multiplier(self, node_id: int, edge: "Edge") -> float:
+    def _compute_accident_multiplier(self, node_id: int) -> float:
         """Compute the combined multiplier based on road type and junction type."""
         accident_config = self.config.accident_config
-        
+
+        edge = self._edge_for_node(node_id)
+        if edge is None:
+            return 1.0
+
         # Road type multiplier
         road_multiplier = accident_config.road_type_multipliers.get(edge.road_type, 1.0)
         
@@ -335,27 +352,38 @@ class Simulation:
         weights = {"highway": 0.7, "dual_carriageway": 0.85, "single_lane": 1.0}
         return weights.get(road_type, 1.0)
 
+    def _heuristic(self, node_id: int, goal_id: int) -> float:
+        node = self.map_data.nodes[node_id]
+        goal = self.map_data.nodes[goal_id]
+        dx = goal.x - node.x
+        dy = goal.y - node.y
+        return (dx * dx + dy * dy) ** 0.5
+
     def _find_route(self, start: int, goal: int) -> List[int]:
+        cached = self.route_cache.get((start, goal))
+        if cached is not None:
+            return list(cached)
         if start == goal:
             return [start]
-        distances: Dict[int, float] = {start: 0.0}
+        g_scores: Dict[int, float] = {start: 0.0}
         came_from: Dict[int, int | None] = {start: None}
-        queue: List[Tuple[float, int]] = [(0.0, start)]
+        queue: List[Tuple[float, float, int]] = [(self._heuristic(start, goal), 0.0, start)]
         visited: set[int] = set()
 
         while queue:
-            current_dist, current = heapq.heappop(queue)
+            _, current_g, current = heapq.heappop(queue)
             if current in visited:
                 continue
             visited.add(current)
             if current == goal:
                 break
             for neighbor, weight in self.nav_adjacency.get(current, []):
-                new_dist = current_dist + weight
-                if new_dist < distances.get(neighbor, float("inf")):
-                    distances[neighbor] = new_dist
+                tentative_g = current_g + weight
+                if tentative_g < g_scores.get(neighbor, float("inf")):
+                    g_scores[neighbor] = tentative_g
                     came_from[neighbor] = current
-                    heapq.heappush(queue, (new_dist, neighbor))
+                    f_score = tentative_g + self._heuristic(neighbor, goal)
+                    heapq.heappush(queue, (f_score, tentative_g, neighbor))
 
         if goal not in came_from:
             return [start]
@@ -363,6 +391,7 @@ class Simulation:
         while path[-1] != start:
             path.append(came_from[path[-1]])
         path.reverse()
+        self.route_cache[(start, goal)] = tuple(path)
         return path
 
     def _assign_lanes(self) -> None:
@@ -380,7 +409,7 @@ class Simulation:
                 allowed = [lanes - 1]
             else:
                 allowed = [0]
-            for idx, agent_id in enumerate(sorted(agent_ids)):
+            for idx, agent_id in enumerate(agent_ids):
                 lane_index = allowed[idx % len(allowed)]
                 self.agents[agent_id].lane_index = lane_index
 
