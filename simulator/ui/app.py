@@ -122,6 +122,8 @@ def build_map_figure(
     selected_agent: int | None = None,
     label_options: List[str] | None = None,
     view_bounds: tuple[float, float, float, float] | None = None,
+    agent_size_mult: float = 1.0,
+    other_size_mult: float = 1.0,
 ) -> go.Figure:
     map_data = simulation.map_data
     edge_lookup = {(edge.start, edge.end): edge for edge in map_data.edges}
@@ -262,7 +264,7 @@ def build_map_figure(
                 x=destination_x,
                 y=destination_y,
                 mode="markers+text" if show_destination_labels else "markers",
-                marker=dict(size=8, color="#ff6f61", symbol="circle-open"),
+                marker=dict(size=8 * other_size_mult, color="#ff6f61", symbol="circle-open"),
                 text=destination_labels,
                 textposition="bottom center",
                 name="destinations",
@@ -303,9 +305,9 @@ def build_map_figure(
     for kind, points in nodes_by_kind.items():
         style = node_styles.get(kind, node_styles["minor_junction"])
         mode = "markers+text" if show_poi_labels else "markers"
-        marker = dict(size=style["size"], color=style["color"], symbol=style["symbol"])
+        marker = dict(size=style["size"] * other_size_mult, color=style["color"], symbol=style["symbol"])
         if style.get("line"):
-            marker["line"] = style["line"]
+            marker["line"] = {"width": style["line"]["width"] * other_size_mult, "color": style["line"]["color"]}
         fig.add_trace(
             go.Scatter(
                 x=[point[0] for point in points],
@@ -324,9 +326,9 @@ def build_map_figure(
             y=agent_y,
             mode="markers+text" if show_agent_labels else "markers",
             marker=dict(
-                size=10,
+                size=10 * agent_size_mult,
                 color="#d62728",
-                line=dict(width=1, color="#a92122"),
+                line=dict(width=1 * agent_size_mult, color="#a92122"),
                 symbol="triangle-up",
                 angle=agent_angles,
             ),
@@ -344,9 +346,9 @@ def build_map_figure(
                 y=cyclist_y,
                 mode="markers+text" if show_agent_labels else "markers",
                 marker=dict(
-                    size=10,
+                    size=10 * agent_size_mult,
                     color="#2ca02c",
-                    line=dict(width=1, color="#1f7a1f"),
+                    line=dict(width=1 * agent_size_mult, color="#1f7a1f"),
                     symbol="triangle-up",
                     angle=cyclist_angles,
                 ),
@@ -378,7 +380,7 @@ def build_map_figure(
                 x=accident_x,
                 y=accident_y,
                 mode="markers+text" if show_accident_labels else "markers",
-                marker=dict(size=14, color="#d62728", symbol="x"),
+                marker=dict(size=14 * other_size_mult, color="#d62728", symbol="x"),
                 name="accidents",
                 customdata=accident_customdata,
                 text=accident_labels,
@@ -399,6 +401,60 @@ def build_map_figure(
     return fig
 
 
+# Tab color definitions
+TAB_COLORS = {
+    "setup-tab": {"bg": "#e3f2fd", "border": "#1976d2", "text": "#1565c0"},
+    "running-tab": {"bg": "#e8f5e9", "border": "#388e3c", "text": "#2e7d32"},
+    "logging-tab": {"bg": "#fff3e0", "border": "#f57c00", "text": "#e65100"},
+    "timing-tab": {"bg": "#fce4ec", "border": "#c2185b", "text": "#ad1457"},
+    "step-details-tab": {"bg": "#f3e5f5", "border": "#7b1fa2", "text": "#6a1b9a"},
+    "info-tab": {"bg": "#e0f7fa", "border": "#0097a7", "text": "#00838f"},
+}
+
+def get_tab_style(tab_id: str) -> dict:
+    """Get base style for a tab."""
+    colors = TAB_COLORS.get(tab_id, {"bg": "#f5f5f5", "border": "#9e9e9e", "text": "#616161"})
+    return {
+        "padding": "8px 12px",
+        "backgroundColor": colors["bg"],
+        "borderTop": f"3px solid {colors['border']}",
+        "borderLeft": f"1px solid {colors['border']}",
+        "borderRight": f"1px solid {colors['border']}",
+        "borderBottom": "none",
+        "borderRadius": "8px 8px 0 0",
+        "color": colors["text"],
+        "fontWeight": "500",
+        "fontSize": "12px",
+        "cursor": "pointer",
+        "marginRight": "2px",
+        "position": "relative",
+        "zIndex": "1",
+        "transition": "all 0.2s ease",
+    }
+
+def get_tab_selected_style(tab_id: str) -> dict:
+    """Get selected style for a tab - dominant appearance."""
+    colors = TAB_COLORS.get(tab_id, {"bg": "#f5f5f5", "border": "#9e9e9e", "text": "#616161"})
+    return {
+        "padding": "10px 14px",
+        "backgroundColor": "white",
+        "borderTop": f"4px solid {colors['border']}",
+        "borderLeft": f"2px solid {colors['border']}",
+        "borderRight": f"2px solid {colors['border']}",
+        "borderBottom": "2px solid white",
+        "borderRadius": "8px 8px 0 0",
+        "color": colors["text"],
+        "fontWeight": "700",
+        "fontSize": "13px",
+        "cursor": "pointer",
+        "marginRight": "2px",
+        "marginBottom": "-2px",
+        "position": "relative",
+        "zIndex": "10",
+        "boxShadow": f"0 -3px 8px rgba(0,0,0,0.1)",
+    }
+
+
 def create_app() -> Dash:
     app = Dash(__name__)
     app.title = "Motor Insurance Simulation"
@@ -413,10 +469,13 @@ def create_app() -> Dash:
                     dcc.Tabs(
                         id="control-tabs",
                         value="setup-tab",
+                        style={"borderBottom": "2px solid #dee2e6", "marginBottom": "0"},
                         children=[
                             dcc.Tab(
-                                label="Set-up",
+                                label="⚙️ Setup",
                                 value="setup-tab",
+                                style=get_tab_style("setup-tab"),
+                                selected_style=get_tab_selected_style("setup-tab"),
                                 children=[
                                     html.Div(
                                         style={"display": "flex", "flexDirection": "column", "gap": "8px"},
@@ -633,8 +692,10 @@ def create_app() -> Dash:
                                 ],
                             ),
                             dcc.Tab(
-                                label="Running",
+                                label="▶️ Run",
                                 value="running-tab",
+                                style=get_tab_style("running-tab"),
+                                selected_style=get_tab_selected_style("running-tab"),
                                 children=[
                                     html.Div(
                                         style={"display": "flex", "flexDirection": "column", "gap": "8px"},
@@ -674,6 +735,31 @@ def create_app() -> Dash:
                                                             ),
                                                             html.Button("⬇️", id="pan-down-btn", title="Pan down"),
                                                         ],
+                                                    ),
+                                                ],
+                                            ),
+                                            html.Hr(),
+                                            html.Label("Element Size Controls"),
+                                            html.Div(
+                                                style={"display": "flex", "flexDirection": "column", "gap": "8px"},
+                                                children=[
+                                                    html.Label("Agents / Cyclists Size", style={"fontSize": "12px"}),
+                                                    dcc.Slider(
+                                                        id="agent-size-slider",
+                                                        min=0.5,
+                                                        max=3.0,
+                                                        step=0.25,
+                                                        value=1.0,
+                                                        marks={0.5: "0.5x", 1: "1x", 2: "2x", 3: "3x"},
+                                                    ),
+                                                    html.Label("Other Elements Size (nodes, accidents)", style={"fontSize": "12px"}),
+                                                    dcc.Slider(
+                                                        id="other-size-slider",
+                                                        min=0.5,
+                                                        max=3.0,
+                                                        step=0.25,
+                                                        value=1.0,
+                                                        marks={0.5: "0.5x", 1: "1x", 2: "2x", 3: "3x"},
                                                     ),
                                                 ],
                                             ),
@@ -728,8 +814,10 @@ def create_app() -> Dash:
                                 ],
                             ),
                             dcc.Tab(
-                                label="Logging",
+                                label="📋 Log",
                                 value="logging-tab",
+                                style=get_tab_style("logging-tab"),
+                                selected_style=get_tab_selected_style("logging-tab"),
                                 children=[
                                     html.Div(
                                         style={"display": "flex", "flexDirection": "column", "gap": "8px"},
@@ -770,8 +858,10 @@ def create_app() -> Dash:
                                 ],
                             ),
                             dcc.Tab(
-                                label="Timing",
+                                label="⏱️ Time",
                                 value="timing-tab",
+                                style=get_tab_style("timing-tab"),
+                                selected_style=get_tab_selected_style("timing-tab"),
                                 children=[
                                     html.Div(
                                         style={"display": "flex", "flexDirection": "column", "gap": "8px"},
@@ -807,8 +897,10 @@ def create_app() -> Dash:
                                 ],
                             ),
                             dcc.Tab(
-                                label="Step Details",
+                                label="📊 Steps",
                                 value="step-details-tab",
+                                style=get_tab_style("step-details-tab"),
+                                selected_style=get_tab_selected_style("step-details-tab"),
                                 children=[
                                     html.Div(
                                         style={"display": "flex", "flexDirection": "column", "gap": "8px"},
@@ -836,8 +928,10 @@ def create_app() -> Dash:
                                 ],
                             ),
                             dcc.Tab(
-                                label="Information",
+                                label="ℹ️ Info",
                                 value="info-tab",
+                                style=get_tab_style("info-tab"),
+                                selected_style=get_tab_selected_style("info-tab"),
                                 children=[
                                     html.Div(
                                         style={"display": "flex", "flexDirection": "column", "gap": "12px"},
@@ -1201,10 +1295,12 @@ def create_app() -> Dash:
         Input("label-options", "value"),
         Input("view-store", "data"),
         Input("visualization-toggle", "value"),
+        Input("agent-size-slider", "value"),
+        Input("other-size-slider", "value"),
         State("timing-store", "data"),
         prevent_initial_call=True,
     )
-    def render_simulation(state, accidents, selected_agent, label_options, view_store, viz_toggle, timing_data):
+    def render_simulation(state, accidents, selected_agent, label_options, view_store, viz_toggle, agent_size, other_size, timing_data):
         render_start = time.perf_counter()
         timing_data = timing_data or []
         show_visualization = viz_toggle and "show_viz" in viz_toggle
@@ -1214,7 +1310,7 @@ def create_app() -> Dash:
             simulation = Simulation(config)
             summary = summarize_run(simulation)
             if show_visualization:
-                figure = build_map_figure(simulation, accidents or [], selected_agent, label_options)
+                figure = build_map_figure(simulation, accidents or [], selected_agent, label_options, agent_size_mult=agent_size or 1.0, other_size_mult=other_size or 1.0)
             else:
                 figure = _build_placeholder_figure("Visualization disabled - simulation running in background")
             return figure, json.dumps(summary, indent=2), timing_data
@@ -1265,6 +1361,8 @@ def create_app() -> Dash:
             selected_agent,
             label_options,
             view_bounds=view_bounds,
+            agent_size_mult=agent_size or 1.0,
+            other_size_mult=other_size or 1.0,
         )
         figure_time = (time.perf_counter() - t0) * 1000
         total_render = (time.perf_counter() - render_start) * 1000
