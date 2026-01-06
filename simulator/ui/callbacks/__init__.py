@@ -1,6 +1,7 @@
 from simulator.ui.callbacks.advance import register_advance_callbacks
 from simulator.ui.callbacks.control import register_control_callbacks
 from simulator.ui.callbacks.logging import register_logging_callbacks
+from simulator.ui.callbacks.progress import register_progress_callbacks
 from simulator.ui.callbacks.probability import register_probability_callbacks
 from simulator.ui.callbacks.render import register_render_callbacks
 from simulator.ui.callbacks.selection import register_selection_callbacks
@@ -17,5 +18,6 @@ def register_callbacks(app) -> None:
     register_view_callbacks(app)
     register_probability_callbacks(app)
     register_logging_callbacks(app)
+    register_progress_callbacks(app)
     register_timing_summary_callbacks(app)
     register_timing_details_callbacks(app)

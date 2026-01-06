@@ -52,6 +52,7 @@ class SimulationStepResult:
     accidents: List[AccidentEvent]
     events: List[dict]
     timing: StepTiming | None = None
+    progress: dict | None = None
 
 
 class Simulation:
@@ -250,6 +251,34 @@ class Simulation:
     def step(self) -> SimulationStepResult:
         total_start = time.perf_counter()
         timing = StepTiming()
+        progress = {"step": self.step_index + 1, "phases": [], "started_at": time.time()}
+
+        def record_phase(
+            name: str,
+            total: int,
+            completed: int,
+            duration_ms: float,
+            items: List[dict] | None = None,
+            summary: dict | None = None,
+            note: str | None = None,
+        ):
+            max_items = 150
+            phase = {
+                "name": name,
+                "total": total,
+                "completed": completed,
+                "duration_ms": duration_ms,
+                "progress_pct": (completed / total * 100) if total else 0,
+            }
+            if summary:
+                phase["summary"] = summary
+            if note:
+                phase["note"] = note
+            if items:
+                phase["items"] = items[:max_items]
+                if len(items) > max_items:
+                    phase["truncated"] = len(items) - max_items
+            progress["phases"].append(phase)
         
         self.step_index += 1
         step_events: List[dict] = []
@@ -260,11 +289,60 @@ class Simulation:
         movements = [self._advance_agent(agent) for agent in self.agents.values()]
         step_events.extend({"type": "movement", **movement, "step": self.step_index} for movement in movements)
         timing.agent_movement_ms = (time.perf_counter() - t0) * 1000
+        movement_items = []
+        action_counts: Dict[str, int] = {}
+        for movement in movements:
+            action = movement.get("action", "unknown")
+            action_counts[action] = action_counts.get(action, 0) + 1
+            agent = self.agents[movement["agent_id"]]
+            remaining_route = max(len(agent.route) - agent.route_index - 1, 0)
+            movement_items.append(
+                {
+                    "label": f"Agent {agent.agent_id} ({agent.agent_type})",
+                    "status": action,
+                    "meta": {
+                        "node": movement.get("node"),
+                        "from": agent.previous_node,
+                        "destination": agent.destination_node,
+                        "route_remaining": remaining_route,
+                        "wait_steps": agent.wait_steps,
+                        "is_idle": agent.is_idle,
+                    },
+                }
+            )
+        record_phase(
+            "Agent movement",
+            total=len(self.agents),
+            completed=len(movements),
+            duration_ms=timing.agent_movement_ms,
+            items=movement_items,
+            summary={"action_counts": action_counts},
+        )
 
         # Phase 2: Lane assignment
         t0 = time.perf_counter()
-        self._assign_lanes()
+        lane_assignments = self._assign_lanes()
         timing.lane_assignment_ms = (time.perf_counter() - t0) * 1000
+        edge_summary: Dict[str, int] = {}
+        for assignment in lane_assignments:
+            edge_label = f"{assignment['edge'][0]}->{assignment['edge'][1]}"
+            edge_summary[edge_label] = edge_summary.get(edge_label, 0) + 1
+        record_phase(
+            "Lane assignment",
+            total=len(lane_assignments) if lane_assignments else len(self.agents),
+            completed=len(lane_assignments),
+            duration_ms=timing.lane_assignment_ms,
+            items=[
+                {
+                    "label": f"Agent {a['agent_id']}",
+                    "status": "lane_set",
+                    "meta": {"edge": f"{a['edge'][0]}->{a['edge'][1]}", "lane": a["lane"], "lanes": a["lanes"]},
+                }
+                for a in lane_assignments
+            ],
+            summary={"edges_touched": len(edge_summary), "agents_assigned": len(lane_assignments)},
+            note="Agents that did not move this step retain their previous lane.",
+        )
 
         # Phase 3: Calculate node occupancy
         t0 = time.perf_counter()
@@ -274,9 +352,34 @@ class Simulation:
         for node_id, agents_at_node in node_occupancy.items():
             self.node_visit_counts[node_id] = self.node_visit_counts.get(node_id, 0) + len(agents_at_node)
         timing.occupancy_calc_ms = (time.perf_counter() - t0) * 1000
+        occupancy_items = []
+        for node_id, agents_at_node in node_occupancy.items():
+            active_here = sum(1 for aid in agents_at_node if not self.agents[aid].is_idle)
+            occupancy_items.append(
+                {
+                    "label": f"Node {node_id}",
+                    "status": "counted",
+                    "meta": {
+                        "agents_here": len(agents_at_node),
+                        "active_agents": active_here,
+                        "visit_count": self.node_visit_counts[node_id],
+                    },
+                }
+            )
+        record_phase(
+            "Occupancy tally",
+            total=max(len(node_occupancy), 1),
+            completed=len(node_occupancy),
+            duration_ms=timing.occupancy_calc_ms,
+            items=occupancy_items,
+            summary={"nodes_with_agents": len(node_occupancy)},
+        )
 
         # Phase 4: Unilateral accidents
         t0 = time.perf_counter()
+        unilateral_checks = []
+        drivers_evaluated = 0
+        accidents_before_unilateral = len(accidents)
         for node_id, agents_at_node in node_occupancy.items():
             if len(agents_at_node) < 1:
                 continue
@@ -290,6 +393,8 @@ class Simulation:
             
             # Unilateral accidents - only for drivers (cyclists cannot have unilateral accidents)
             active_drivers = [aid for aid in active_agents if self.agents[aid].agent_type == "driver"]
+            if active_drivers:
+                drivers_evaluated += len(active_drivers)
             for agent_id in active_drivers:
                 agent = self.agents[agent_id]
                 base_seed = self.config.seed + self.step_index * 1_000_003 + agent_id * 9_973
@@ -310,10 +415,35 @@ class Simulation:
                         rng=rng,
                     )
                     accidents.append(accident)
+            if active_drivers:
+                unilateral_checks.append(
+                    {
+                        "label": f"Node {node_id}",
+                        "status": "evaluated",
+                        "meta": {
+                            "drivers_checked": len(active_drivers),
+                            "accidents_found": sum(1 for a in accidents if a.location == node_id),
+                            "multiplier": multiplier,
+                        },
+                    }
+                )
         timing.unilateral_accidents_ms = (time.perf_counter() - t0) * 1000
+        record_phase(
+            "Unilateral accident checks",
+            total=max(drivers_evaluated, 1),
+            completed=drivers_evaluated,
+            duration_ms=timing.unilateral_accidents_ms,
+            items=unilateral_checks,
+            summary={
+                "drivers_checked": drivers_evaluated,
+                "accidents_found": len(accidents) - accidents_before_unilateral,
+            },
+        )
 
         # Phase 5: Multi-agent accidents
         t0 = time.perf_counter()
+        multi_checks = []
+        accidents_before_multi = len(accidents)
         for node_id, agents_at_node in node_occupancy.items():
             if len(agents_at_node) < 1:
                 continue
@@ -322,6 +452,8 @@ class Simulation:
             multiplier = self.node_accident_multiplier.get(node_id, 1.0)
             accident_config = self.config.accident_config
             active_agents = [aid for aid in agents_at_node if not self.agents[aid].is_idle]
+            drivers: List[int] = []
+            cyclists: List[int] = []
 
             # Multi-agent encounters
             if len(active_agents) > 1:
@@ -370,7 +502,26 @@ class Simulation:
                                 rng=random.Random(base_seed + 22),
                             )
                         )
+            multi_checks.append(
+                {
+                    "label": f"Node {node_id}",
+                    "status": "processed",
+                    "meta": {
+                        "active_agents": len(active_agents),
+                        "drivers": len(drivers),
+                        "cyclists": len(cyclists),
+                    },
+                }
+            )
         timing.multi_agent_accidents_ms = (time.perf_counter() - t0) * 1000
+        record_phase(
+            "Multi-agent accident checks",
+            total=max(len(node_occupancy), 1),
+            completed=len(multi_checks),
+            duration_ms=timing.multi_agent_accidents_ms,
+            items=multi_checks,
+            summary={"accidents_found": len(accidents) - accidents_before_multi},
+        )
 
         # Phase 6: Event logging
         t0 = time.perf_counter()
@@ -387,9 +538,26 @@ class Simulation:
 
         self.event_log.extend(step_events)
         timing.event_logging_ms = (time.perf_counter() - t0) * 1000
+        record_phase(
+            "Event + accident logging",
+            total=max(len(step_events), 1),
+            completed=len(step_events),
+            duration_ms=timing.event_logging_ms,
+            items=[
+                {
+                    "label": f"{event['type'].capitalize()} @ step {event['step']}",
+                    "status": "recorded",
+                    "meta": {k: v for k, v in event.items() if k not in {"type", "step"}},
+                }
+                for event in step_events
+            ],
+            summary={"events_recorded": len(step_events)},
+        )
         
         timing.total_step_ms = (time.perf_counter() - total_start) * 1000
-        return SimulationStepResult(step=self.step_index, accidents=accidents, events=step_events, timing=timing)
+        progress["total_ms"] = timing.total_step_ms
+        progress["accident_count"] = len(accidents)
+        return SimulationStepResult(step=self.step_index, accidents=accidents, events=step_events, timing=timing, progress=progress)
 
     def _edge_for_node(self, node_id: int) -> "Edge" | None:
         return self.node_edge.get(node_id, self.default_edge)
@@ -464,12 +632,13 @@ class Simulation:
         self.route_cache[(start, goal)] = tuple(path)
         return path
 
-    def _assign_lanes(self) -> None:
+    def _assign_lanes(self) -> List[dict]:
         edge_groups: Dict[Tuple[int, int], List[int]] = {}
         for agent in self.agents.values():
             if agent.previous_node != agent.current_node:
                 edge_groups.setdefault((agent.previous_node, agent.current_node), []).append(agent.agent_id)
 
+        assignments: List[dict] = []
         for edge_key, agent_ids in edge_groups.items():
             edge = self.edge_lookup.get(edge_key)
             lanes = edge.lanes if edge else 1
@@ -482,6 +651,15 @@ class Simulation:
             for idx, agent_id in enumerate(agent_ids):
                 lane_index = allowed[idx % len(allowed)]
                 self.agents[agent_id].lane_index = lane_index
+                assignments.append(
+                    {
+                        "agent_id": agent_id,
+                        "edge": edge_key,
+                        "lane": lane_index,
+                        "lanes": lanes,
+                    }
+                )
+        return assignments
 
     def run(self, steps: int | None = None) -> List[SimulationStepResult]:
         if steps is None:

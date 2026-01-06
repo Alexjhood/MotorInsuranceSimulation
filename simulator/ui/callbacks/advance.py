@@ -22,6 +22,7 @@ def register_advance_callbacks(app: dash.Dash) -> None:
         Output("timing-store", "data", allow_duplicate=True),
         Output("last-step-timestamp", "data", allow_duplicate=True),
         Output("step-details-store", "data", allow_duplicate=True),
+        Output("progress-store", "data", allow_duplicate=True),
         Input("tick", "n_intervals"),
         Input("step-btn", "n_clicks"),
         Input("back-btn", "n_clicks"),
@@ -31,12 +32,16 @@ def register_advance_callbacks(app: dash.Dash) -> None:
         State("log-store", "data"),
         State("timing-store", "data"),
         State("last-step-timestamp", "data"),
+        State("progress-store", "data"),
         prevent_initial_call=True,
     )
-    def advance_simulation(_, __, ___, state, accidents, history_index, log_data, timing_data, last_step_ts):
+    def advance_simulation(
+        _, __, ___, state, accidents, history_index, log_data, timing_data, last_step_ts, progress_data
+    ):
         trigger = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
         log_data = log_data or []
         timing_data = timing_data or []
+        progress_data = progress_data or {}
 
         step_details = {"phase": "advance_callback", "timings": [], "data_sizes": {}}
 
@@ -75,8 +80,26 @@ def register_advance_callbacks(app: dash.Dash) -> None:
                         "message": f"Stepped back to step {back_state.get('step_index', 0)}",
                     }
                 )
-                return back_state, back_accidents, new_idx, log_data, timing_data, this_step_start, step_details
-            return state, accidents, history_index, log_data, timing_data, last_step_ts, step_details
+                return (
+                    back_state,
+                    back_accidents,
+                    new_idx,
+                    log_data,
+                    timing_data,
+                    this_step_start,
+                    step_details,
+                    progress_data,
+                )
+            return (
+                state,
+                accidents,
+                history_index,
+                log_data,
+                timing_data,
+                last_step_ts,
+                step_details,
+                progress_data,
+            )
 
         step_timing = {"step": 0, "tasks": {}, "sim_breakdown": {}, "real_elapsed_ms": real_elapsed_ms}
         wall_clock_start = time.time()
@@ -164,6 +187,10 @@ def register_advance_callbacks(app: dash.Dash) -> None:
                 log_data = log_data[-100:]
 
             new_history_index = server_history.append(new_state, accidents)
+            progress_data = result.progress or {"step": simulation.step_index, "phases": []}
+            progress_data["real_elapsed_ms"] = real_elapsed_ms
+            progress_data["callback_ms"] = step_timing["tasks"]["total_perf"]
+            progress_data["timestamp"] = time.time()
 
             t0 = time.perf_counter()
             step_details["data_sizes"]["state_out"] = len(json.dumps(new_state)) if new_state else 0
@@ -179,7 +206,16 @@ def register_advance_callbacks(app: dash.Dash) -> None:
             step_details["callback_total_ms"] = (time.perf_counter() - callback_start) * 1000
             step_details["history_length"] = server_history.length
 
-            return new_state, accidents, new_history_index, log_data, timing_data, this_step_start, step_details
+            return (
+                new_state,
+                accidents,
+                new_history_index,
+                log_data,
+                timing_data,
+                this_step_start,
+                step_details,
+                progress_data,
+            )
 
         except Exception as e:
             elapsed = (time.time() - wall_clock_start) * 1000
@@ -191,4 +227,13 @@ def register_advance_callbacks(app: dash.Dash) -> None:
             }
             log_data.append(error_entry)
             step_details["error"] = str(e)
-            return state, accidents, history_index, log_data, timing_data, this_step_start, step_details
+            return (
+                state,
+                accidents,
+                history_index,
+                log_data,
+                timing_data,
+                this_step_start,
+                step_details,
+                progress_data,
+            )

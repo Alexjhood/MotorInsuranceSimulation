@@ -82,6 +82,7 @@ def build_layout() -> html.Div:
                     dcc.Store(id="visualization-enabled", data=True),
                     dcc.Store(id="last-step-timestamp", data=None),
                     dcc.Store(id="step-details-store", data={}),
+                    dcc.Store(id="progress-store", data={}),
                 ],
             ),
         ],

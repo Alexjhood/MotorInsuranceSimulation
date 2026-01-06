@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dash import dcc, html
 
+from simulator.ui.layout.progress import build_progress_tab
 from simulator.ui.layout.step_details import build_step_details_tab
 from simulator.ui.layout.timing import build_timing_tab
 
@@ -19,6 +20,11 @@ def build_logging_tab() -> html.Div:
                         label="📋 Log",
                         value="log-subtab",
                         children=[_build_log_panel()],
+                    ),
+                    dcc.Tab(
+                        label="🚦 Progress",
+                        value="progress-subtab",
+                        children=[build_progress_tab()],
                     ),
                     dcc.Tab(
                         label="⏱️ Time",
